@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Hadron Chrome Extension",
+  "version": "0.1.0",
+  "description": "Send the current page's URL or full HTML to Hadron as a node, optionally processed by a Hadron App task.",
+  "minimum_chrome_version": "116",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApZDxRgt0L7NEMaLGxZTYBbwqIyDm+vS2A9avhxygjd8X79jyrbYuCBsAtgWq4a+giJTgzgVZgrI8fstPjqGYG5dRzNp6JW9nKqifUdJIZGg4aDg8lAJquSTAj7X6xhtM7loo8OZL4aOJNCRhXJ3mgR5gvJrJ4k6mx8+YtRGfjIFIlrC2EDwS3NlbhT0QdhWjdfzttN+npw8D2OUn7XfH1whXqJNofr5CbYvwxn25RYXZ1xPqYMM1Ll46vrvHd8K4nQcSfZ9bjN3/I5SvcaF3qvAnSsSHksPFidzZSZkgrsMy8usNDg28EQsF8G5LTp82Duw6pytzaNtvLcx1p/xydQIDAQAB",
+  "permissions": ["identity", "storage", "activeTab", "scripting"],
+  "host_permissions": ["https://srv.hadronmemory.com/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Hadron Chrome Extension",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  }
+}
