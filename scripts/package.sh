@@ -5,7 +5,7 @@
 #   scripts/package.sh            # store build: strips the dev "key" field
 #   scripts/package.sh --keep-key # keep the pinned dev ID (for sideloading/testing)
 #
-# Output: dist/hadron-web-clipper-<version>.zip
+# Output: dist/hadron-chrome-extension-<version>.zip
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -17,7 +17,7 @@ KEEP_KEY=0
 VERSION="$(node -e "process.stdout.write(require('./manifest.json').version)")"
 BUILD="$(mktemp -d)"
 trap 'rm -rf "$BUILD"' EXIT
-OUT="dist/hadron-web-clipper-${VERSION}.zip"
+OUT="dist/hadron-chrome-extension-${VERSION}.zip"
 
 # Files that ship in the package (everything the runtime needs — nothing else).
 FILES=(

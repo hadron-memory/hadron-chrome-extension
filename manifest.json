@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Hadron Web Clipper",
+  "name": "Hadron Chrome Extension",
   "version": "0.1.0",
   "description": "Send the current page's URL or full HTML to Hadron as a node, optionally processed by a Hadron App task.",
   "minimum_chrome_version": "116",
@@ -12,7 +12,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Hadron Web Clipper",
+    "default_title": "Hadron Chrome Extension",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon-16.png",

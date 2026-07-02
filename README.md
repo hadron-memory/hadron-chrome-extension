@@ -1,7 +1,8 @@
-# Hadron Web Clipper (Chrome extension)
+# Hadron Chrome Extension
 
-Send the URL or full HTML of the page you're viewing to [Hadron](https://srv.hadronmemory.com)
-as a node — optionally handing it to a Hadron App task for background processing.
+A Chrome extension for [Hadron](https://srv.hadronmemory.com). Today it sends the URL or full
+HTML of the page you're viewing to Hadron as a node — optionally handing it to a Hadron App
+task for background processing. More Hadron-in-the-browser capabilities will be added over time.
 
 It authenticates with the same OAuth 2.1 + PKCE + Dynamic Client Registration flow as the
 Hadron CLI and macOS app, and captures content by reading the DOM you're already viewing, so
@@ -21,7 +22,7 @@ second authentication.
 1. Open `chrome://extensions`.
 2. Enable **Developer mode** (top-right).
 3. Click **Load unpacked** and select this directory.
-4. Pin the "Hadron Web Clipper" icon and click it.
+4. Pin the "Hadron Chrome Extension" icon and click it.
 
 The extension ID is pinned by the `key` in `manifest.json`, so the OAuth redirect URI is stable:
 
@@ -46,7 +47,7 @@ sign in and caches the resulting `client_id`.
 Build a Chrome Web Store-ready zip:
 
 ```
-scripts/package.sh              # store build → dist/hadron-web-clipper-<version>.zip
+scripts/package.sh              # store build → dist/hadron-chrome-extension-<version>.zip
 scripts/package.sh --keep-key   # keep the pinned dev ID (for sideloading/testing)
 ```
 
@@ -79,9 +80,10 @@ handles the token directly — it messages the service worker for every privileg
 
 ## Notes / limitations
 
-- **Background processing:** the App-task step currently calls the `runTask` mutation, which
-  renders synchronously. If the server later exposes a dedicated async "process this node"
-  mutation, swapping it is a one-line change in `lib/api.js`.
+- **Background processing:** node creation currently uses `upsertNode` and the App-task step
+  calls the `runTask` mutation, which renders synchronously. A dedicated server-side
+  `importNode` API (accepting either a URL for later server-side fetch or inline content, plus
+  the target node) is planned — migrating to it is a contained change in `lib/api.js`.
 - **Full HTML** is sent as the rendered DOM with scripts, stylesheets, comments,
   and large inline data-URIs stripped (no readability extraction). This keeps
   clips under the server body limit and gives the processing task cleaner input.
