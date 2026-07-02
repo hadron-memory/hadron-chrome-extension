@@ -69,6 +69,10 @@ const handlers = {
       },
     });
 
+    if (!node || !node.loc) {
+      throw new Error('Failed to create the node in Hadron.');
+    }
+
     let taskResult = null;
     if (taskName) {
       // Pass the created node's URN so the task can reference the content.

@@ -16,6 +16,7 @@ KEEP_KEY=0
 
 VERSION="$(node -e "process.stdout.write(require('./manifest.json').version)")"
 BUILD="$(mktemp -d)"
+trap 'rm -rf "$BUILD"' EXIT
 OUT="dist/hadron-web-clipper-${VERSION}.zip"
 
 # Files that ship in the package (everything the runtime needs — nothing else).
@@ -50,7 +51,6 @@ fi
 
 rm -f "$OUT"
 ( cd "$BUILD" && zip -qr -X "$ROOT/$OUT" . )
-rm -rf "$BUILD"
 
 echo "✓ wrote $OUT"
 unzip -l "$OUT"
