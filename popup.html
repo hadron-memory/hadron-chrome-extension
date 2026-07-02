@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="popup.css" />
+    <title>Hadron Web Clipper</title>
+  </head>
+  <body>
+    <header class="topbar">
+      <img src="icons/icon-32.png" alt="" class="logo" />
+      <span class="title">Hadron Web Clipper</span>
+    </header>
+
+    <!-- Loading -->
+    <section id="view-loading" class="view">
+      <p class="muted">Loading…</p>
+    </section>
+
+    <!-- Signed out -->
+    <section id="view-signedout" class="view hidden">
+      <p class="muted">Sign in with your Hadron account to clip pages.</p>
+      <button id="btn-signin" class="primary">Sign in to Hadron</button>
+    </section>
+
+    <!-- Capture form -->
+    <section id="view-form" class="view hidden">
+      <div class="page-info">
+        <div id="page-title" class="page-title"></div>
+        <div id="page-url" class="page-url muted"></div>
+      </div>
+
+      <fieldset class="field">
+        <legend>Send</legend>
+        <label class="radio">
+          <input type="radio" name="mode" value="url" checked />
+          <span>Page URL</span>
+        </label>
+        <label class="radio">
+          <input type="radio" name="mode" value="html" />
+          <span>Full HTML content</span>
+        </label>
+      </fieldset>
+
+      <label class="field">
+        <span class="label">Target memory</span>
+        <select id="memory"></select>
+      </label>
+
+      <label class="field">
+        <span class="label">Node name</span>
+        <input id="name" type="text" placeholder="Node name" />
+      </label>
+
+      <label class="field">
+        <span class="label">LOC / URN</span>
+        <input id="loc" type="text" placeholder="e.g. web:captured:my-page" spellcheck="false" />
+      </label>
+
+      <label class="field">
+        <span class="label">Process with app <span class="muted">(optional)</span></span>
+        <select id="app">
+          <option value="">— none —</option>
+        </select>
+      </label>
+
+      <label class="field hidden" id="task-field">
+        <span class="label">Task</span>
+        <select id="task">
+          <option value="">— none —</option>
+        </select>
+      </label>
+
+      <div id="status" class="status hidden"></div>
+
+      <button id="btn-send" class="primary">Send to Hadron</button>
+
+      <footer class="footer">
+        <span class="muted">Signed in</span>
+        <button id="btn-signout" class="linkbtn">Sign out</button>
+      </footer>
+    </section>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
