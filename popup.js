@@ -458,7 +458,7 @@ function renderTasks(filter) {
 
 // ── Memories tab ─────────────────────────────────────────────────────────────
 // Mirrors the Find tab: a search input + a paginated (page size 10) list. The
-// user's memories all arrive in one call (myMemories), so the search filters
+// user's memories are drained fully up front (paged memories query), so the search filters
 // them client-side rather than round-tripping.
 
 const MEM_PAGE_SIZE = 10;
