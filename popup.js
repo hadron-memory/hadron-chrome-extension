@@ -551,7 +551,10 @@ function taskToDetail(t) {
       t.nodeType && { k: 'Type', v: t.nodeType },
     ].filter(Boolean),
     preview: t.abstract,
-    run: { taskName: t.name },
+    // Carry the node URN so Run uses the server's URN bypass (unambiguous),
+    // instead of name-only resolution that can hit the wrong same-named task
+    // or the server's default memory. Falls back to name when urn is absent.
+    run: { taskName: t.name, urn: t.urn || null },
   };
 }
 
@@ -688,7 +691,7 @@ async function runDetailTask(run, btn) {
   btn.textContent = 'Running…';
   setStatus('#detail-status', null);
   try {
-    const { result } = await bg('runTask', { taskName: run.taskName });
+    const { result } = await bg('runTask', { taskName: run.taskName, urn: run.urn });
     setStatus('#detail-status', 'ok', typeof result === 'string' && result ? result.slice(0, 400) : 'Task run.');
   } catch (err) {
     if (err.unauthorized) return handleUnauthorized();

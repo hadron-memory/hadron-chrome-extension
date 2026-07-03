@@ -51,8 +51,8 @@ const handlers = {
     return { hits: await globalSearch(query) };
   },
 
-  async runTask({ taskName, memory, args }) {
-    return { result: await runTask({ taskName, memory, args }) };
+  async runTask({ taskName, memory, urn, args }) {
+    return { result: await runTask({ taskName, memory, urn, args }) };
   },
 
   // Import a local file via the planned importNode API. Inert (errors
