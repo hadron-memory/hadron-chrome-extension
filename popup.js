@@ -102,12 +102,6 @@ async function getActiveTab() {
   return tab || null;
 }
 
-function openUrl(url) {
-  if (!url) return;
-  if (IN_EXTENSION) chrome.tabs.create({ url });
-  else window.open(url, '_blank', 'noopener');
-}
-
 // ── views / tabs ─────────────────────────────────────────────────────────────
 
 const views = {
@@ -126,7 +120,11 @@ function showView(name) {
 }
 
 function showTab(name) {
-  $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
+  $$('.tab').forEach((t) => {
+    const isActive = t.dataset.tab === name;
+    t.classList.toggle('active', isActive);
+    t.setAttribute('aria-selected', isActive ? 'true' : 'false');
+  });
   $$('.panel').forEach((p) => p.classList.toggle('hidden', p.dataset.panel !== name));
   if (name === 'find') $('#find-input').focus();
   if (name === 'tasks') loadTasks();
@@ -138,10 +136,12 @@ function showTab(name) {
 
 function debounce(fn, ms) {
   let t;
-  return (...a) => {
+  const debounced = (...a) => {
     clearTimeout(t);
     t = setTimeout(() => fn(...a), ms);
   };
+  debounced.cancel = () => clearTimeout(t);
+  return debounced;
 }
 
 function slugify(s) {
@@ -193,6 +193,9 @@ function rowEl({ title, badge, urn, urnType, sub }, onClick) {
 
   row.addEventListener('click', onClick);
   row.addEventListener('keydown', (e) => {
+    // Only when the row itself is focused — not when a keypress bubbles up from
+    // a nested chip button (so Enter/Space there copies without opening detail).
+    if (e.target !== e.currentTarget) return;
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(e); }
   });
   return row;
@@ -205,6 +208,8 @@ let findHits = [];
 let findPage = 0;
 
 async function performFind(q) {
+  // An immediate search (submit / Enter) supersedes any pending debounced one.
+  if (runFind?.cancel) runFind.cancel();
   const empty = $('#find-empty');
   if (!q.trim()) {
     findHits = [];
@@ -314,7 +319,7 @@ function fillSelect(sel, items, placeholder) {
 }
 
 function onSourceChange() {
-  const src = document.querySelector('input[name="source"]:checked').value;
+  const src = $('input[name="source"]:checked').value;
   $('#src-page').classList.toggle('hidden', src !== 'page');
   $('#src-file').classList.toggle('hidden', src !== 'file');
 }
@@ -329,7 +334,8 @@ async function onAppChange() {
     const { tasks } = await bg('listAppTasks', { appId });
     for (const t of tasks) {
       const o = document.createElement('option');
-      o.value = t.name;
+      o.value = t.name; // page-import runTask resolves the task by name
+      if (t.urn) o.dataset.urn = t.urn; // file-import importNode wants the URN
       o.textContent = t.name;
       taskSel.appendChild(o);
     }
@@ -371,8 +377,10 @@ async function onImport() {
   const memoryUrn = memorySel.selectedOptions[0]?.dataset.urn || '';
   const loc = $('#loc').value.trim();
   const name = $('#name').value.trim();
-  const source = document.querySelector('input[name="source"]:checked').value;
-  const taskName = $('#task').value || null;
+  const source = $('input[name="source"]:checked').value;
+  const taskSel = $('#task');
+  const taskName = taskSel.value || null; // page-import: runTask resolves by name
+  const taskUrn = taskSel.selectedOptions[0]?.dataset.urn || null; // file-import: importNode wants the URN
 
   setStatus('#import-status', null);
   if (!memoryId) return setStatus('#import-status', 'err', 'Pick a target memory.');
@@ -387,12 +395,12 @@ async function onImport() {
       const { content, contentType } = await readFile(file);
       const { result } = await bg('importFile', {
         memoryId, loc, name: name || file.name, content, contentType,
-        fileName: file.name, taskUrn: taskName || null,
+        fileName: file.name, taskUrn,
       });
       setStatus('#import-status', 'ok', `Imported ${result?.node?.loc || loc} (${result?.status || 'ok'})`);
     } else {
       if (!activeTab) throw new Error('No active tab.');
-      const mode = document.querySelector('input[name="mode"]:checked').value;
+      const mode = $('input[name="mode"]:checked').value;
       const resp = await bg('send', {
         mode, tabId: activeTab.id, tabUrl: activeTab.url, tabTitle: activeTab.title,
         memoryId, memoryUrn, loc, name, taskName,
@@ -756,6 +764,10 @@ async function init() {
   $('#memories-prev').addEventListener('click', () => { memoryPage--; renderMemoriesPage(); });
   $('#memories-next').addEventListener('click', () => { memoryPage++; renderMemoriesPage(); });
   $$('input[name="source"]').forEach((r) => r.addEventListener('change', onSourceChange));
+  $('#file-input').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) $('#name').value = file.name;
+  });
   $('#app').addEventListener('change', onAppChange);
   $('#btn-import').addEventListener('click', onImport);
   $('#header-back').addEventListener('click', closeDetail);
