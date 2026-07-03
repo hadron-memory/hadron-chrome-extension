@@ -80,7 +80,8 @@ handles the token directly — it messages the service worker for every privileg
 
 ## Notes / limitations
 
-- **Background processing:** node creation currently uses `upsertNode` and the App-task step
+- **Background processing:** node creation currently uses `createNode` (with an `updateNode`
+  fallback on a loc collision, so a re-clip replaces the previous capture) and the App-task step
   calls the `runTask` mutation, which renders synchronously. A dedicated server-side
   `importNode` API (accepting either a URL for later server-side fetch or inline content, plus
   the target node) is planned — migrating to it is a contained change in `lib/api.js`.
