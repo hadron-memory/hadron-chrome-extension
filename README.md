@@ -13,7 +13,7 @@ second authentication.
 
 - **OAuth login** against `srv.hadronmemory.com` via `chrome.identity.launchWebAuthFlow`.
 - **URL or full HTML** — choose per clip.
-- **Target memory** picker (`myMemories`).
+- **Target memory** picker (the paginated `memories` query).
 - **LOC / URN + node name** for the created node.
 - **Optional App → task** selection; the chosen runnable task is invoked to process the clip.
 
@@ -70,7 +70,7 @@ background.js     Service worker — owns OAuth, GraphQL, and page capture
 popup.html/.css/.js   Toolbar popup UI
 lib/config.js     Base URL + endpoint paths + storage keys
 lib/oauth.js      PKCE, discovery, DCR, launchWebAuthFlow, token exchange/storage
-lib/api.js        GraphQL client + operations (myMemories, myApps, appNodes, upsertNode, runTask)
+lib/api.js        GraphQL client + operations (memories, apps, appNodes, createNode/updateNode, runTask)
 lib/capture.js    chrome.scripting page-context capture (url / title / outerHTML)
 icons/            Toolbar/action icons
 ```
