@@ -1,24 +1,22 @@
 // Popup UI controller. Pure presentation: every privileged action (OAuth,
-// network, page capture) is delegated to the service worker via messages.
+// network, page capture, file import) is delegated to the service worker.
+//
+// When opened outside an extension context (e.g. the dev preview), it falls
+// back to in-memory mock data so the layout can be inspected without Chrome.
 
-const $ = (sel) => document.querySelector(sel);
+import { portalUrlForUrn, portalUrlForNode, PORTAL_URL } from './lib/config.js';
+import { parseDisplayUrn, buildResolverUrl, CANONICAL_SCHEME } from './lib/urn.js';
 
-const views = {
-  loading: $('#view-loading'),
-  signedout: $('#view-signedout'),
-  form: $('#view-form'),
-};
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
-function showView(name) {
-  for (const [key, el] of Object.entries(views)) {
-    el.classList.toggle('hidden', key !== name);
-  }
-}
+const IN_EXTENSION =
+  typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id;
 
-// Promise wrapper around chrome.runtime.sendMessage. Rejects on transport
-// failure or a handler error; surfaces `unauthorized` so we can bounce to
-// the signed-out view.
+// ── service-worker bridge (with mock fallback) ───────────────────────────────
+
 function bg(type, extra = {}) {
+  if (!IN_EXTENSION) return mockBg(type, extra);
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage({ type, ...extra }, (resp) => {
       if (chrome.runtime.lastError) {
@@ -34,140 +32,683 @@ function bg(type, extra = {}) {
   });
 }
 
-let activeTab = null;
+// Mock backend for the dev preview (no Chrome APIs). Returns representative
+// data so the layout renders; never used inside the real extension.
+function mockBg(type, extra = {}) {
+  const memories = [
+    { id: 'm1', urn: 'hrn:memory:acme.com::knowledge-base', name: 'Knowledge Base', class: 'knowledge', shortDescription: 'Shared org knowledge.', description: 'The organization-wide knowledge base: product docs, decisions, and reference material clipped from the web.' },
+    { id: 'm2', urn: 'hrn:memory:acme.com::research', name: 'Research', class: 'group', shortDescription: 'Research notes.', description: 'Working memory for the research team — sources, summaries, and in-progress findings.' },
+    { id: 'm3', urn: 'hrn:memory:holger::personal', name: 'Personal', class: 'personal', shortDescription: 'My private memory.', description: 'Personal, private clips and notes visible only to me.' },
+    ...Array.from({ length: 11 }, (_, i) => ({
+      id: `mx${i + 1}`,
+      urn: `hrn:memory:acme.com::project-${i + 1}`,
+      name: `Project ${i + 1}`,
+      class: i % 2 === 0 ? 'group' : 'knowledge',
+      shortDescription: `Memory for project ${i + 1}.`,
+      description: `Working memory for project ${i + 1}.`,
+    })),
+  ];
+  const apps = [
+    { id: 'a1', urn: 'hrn:app:acme.com::research-assistant', name: 'Research Assistant', appType: 'AGENT' },
+    { id: 'a2', urn: 'hrn:app:acme.com::clipper', name: 'Web Clipper', appType: 'AUTOMATION' },
+  ];
+  const tasks = [
+    { id: 't1', loc: 'tasks:summarize', urn: 'hrn:node:acme.com::knowledge-base::tasks:summarize', name: 'Summarize content', nodeType: 'task', abstract: 'Summarize the imported page into five bullet points.', memoryId: 'm1' },
+    { id: 't2', loc: 'tasks:extract-links', urn: 'hrn:node:acme.com::knowledge-base::tasks:extract-links', name: 'Extract links', nodeType: 'task', abstract: 'Pull every outbound link out of the page.', memoryId: 'm1' },
+    { id: 't3', loc: 'tasks:tag', urn: 'hrn:node:acme.com::research::tasks:tag', name: 'Auto-tag', nodeType: 'task', abstract: 'Suggest tags for the node from its content.', memoryId: 'm2' },
+  ];
+  const data = {
+    getAuthState: { signedIn: true },
+    signIn: { signedIn: true },
+    signOut: { signedIn: false },
+    listMemories: { memories },
+    listApps: { apps },
+    listTasks: { tasks },
+    listAppTasks: { tasks: tasks.filter((t) => t.memoryId === 'm1') },
+    search: {
+      // Enough hits to exercise the 10-per-page pager in the preview.
+      hits: (extra.query
+        ? [
+            { entityType: 'memory', id: 'm2', urn: 'hrn:memory:acme.com::research', name: 'Research', description: 'A group memory.', matchedField: 'name', score: 0.95, memoryId: 'm2' },
+            { entityType: 'app', id: 'a1', urn: 'hrn:app:acme.com::research-assistant', name: 'Research Assistant', description: 'An agent app.', matchedField: 'name', score: 0.9 },
+            ...Array.from({ length: 21 }, (_, i) => ({
+              entityType: 'node',
+              id: `n${i + 1}`,
+              urn: `hrn:node:acme.com::knowledge-base::web:${extra.query}-${i + 1}`,
+              name: `Result ${i + 1} for “${extra.query}”`,
+              description: i % 2 === 0 ? `A matching node about ${extra.query}.` : '',
+              matchedField: 'content',
+              score: 0.8 - i * 0.01,
+              memoryId: 'm1',
+            })),
+          ]
+        : []),
+    },
+    runTask: { result: '• Point one\n• Point two\n• Point three' },
+    send: { node: { loc: extra.loc || 'web:example:clip' }, taskStarted: Boolean(extra.taskName) },
+    importFile: { result: null, ok: false },
+  };
+  if (type === 'importFile') {
+    return Promise.reject(Object.assign(new Error('importNode is not available on the server yet (hadron-server#457).'), {}));
+  }
+  return Promise.resolve({ ok: true, ...(data[type] || {}) });
+}
+
+async function getActiveTab() {
+  if (!IN_EXTENSION) {
+    return { id: 0, url: 'https://example.com/article', title: 'Example Article — A Sample Page' };
+  }
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab || null;
+}
+
+function openUrl(url) {
+  if (!url) return;
+  if (IN_EXTENSION) chrome.tabs.create({ url });
+  else window.open(url, '_blank', 'noopener');
+}
+
+// ── views / tabs ─────────────────────────────────────────────────────────────
+
+const views = {
+  loading: $('#view-loading'),
+  signedout: $('#view-signedout'),
+  app: $('#view-app'),
+};
+
+function showView(name) {
+  for (const [key, el] of Object.entries(views)) el.classList.toggle('hidden', key !== name);
+  $('#btn-signout').classList.toggle('hidden', name !== 'app');
+  // Any top-level view change leaves the detail overlay + its header back button.
+  $('#detail').classList.add('hidden');
+  $('#header-back').classList.add('hidden');
+  $('#brand').classList.remove('hidden');
+}
+
+function showTab(name) {
+  $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
+  $$('.panel').forEach((p) => p.classList.toggle('hidden', p.dataset.panel !== name));
+  if (name === 'find') $('#find-input').focus();
+  if (name === 'tasks') loadTasks();
+  if (name === 'memories') loadMemories();
+  if (name === 'import') initImport();
+}
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+function debounce(fn, ms) {
+  let t;
+  return (...a) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...a), ms);
+  };
+}
+
 function slugify(s) {
-  return (s || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40);
+  return (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
 }
 
 function suggestLoc(tab) {
-  let host = '';
-  try {
-    host = new URL(tab.url).hostname.replace(/^www\./, '');
-  } catch {
-    host = 'page';
-  }
-  const title = slugify(tab.title) || 'clip';
-  return `web:${slugify(host)}:${title}`;
+  let host = 'page';
+  try { host = new URL(tab.url).hostname.replace(/^www\./, ''); } catch {}
+  return `web:${slugify(host)}:${slugify(tab.title) || 'clip'}`;
 }
 
-function setStatus(kind, message) {
-  const el = $('#status');
-  if (!kind) {
-    el.classList.add('hidden');
-    el.textContent = '';
+function handleUnauthorized() { showView('signedout'); }
+
+/** Build a clickable list row. */
+// A list row is a clickable container (opens detail) that can hold an
+// interactive URN chip — so it's a <div role="button">, not a <button>
+// (nesting the chip's copy buttons in a <button> would be invalid).
+// The chip's buttons stopPropagation so a copy doesn't also open the detail.
+function rowEl({ title, badge, urn, urnType, sub }, onClick) {
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.setAttribute('role', 'button');
+  row.tabIndex = 0;
+
+  const t = document.createElement('div');
+  t.className = 'row-title';
+  if (badge) {
+    const b = document.createElement('span');
+    b.className = 'badge';
+    b.textContent = badge;
+    t.appendChild(b);
+  }
+  t.appendChild(document.createTextNode(title || '(untitled)'));
+  row.appendChild(t);
+
+  if (urn) {
+    const chip = urnChip(urn, urnType);
+    chip.classList.add('row-urn');
+    row.appendChild(chip);
+  }
+  if (sub) {
+    const s = document.createElement('div');
+    s.className = 'row-sub';
+    if (sub instanceof Node) s.appendChild(sub);
+    else s.textContent = sub;
+    row.appendChild(s);
+  }
+
+  row.addEventListener('click', onClick);
+  row.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(e); }
+  });
+  return row;
+}
+
+// ── Find tab ─────────────────────────────────────────────────────────────────
+
+const FIND_PAGE_SIZE = 10;
+let findHits = [];
+let findPage = 0;
+
+async function performFind(q) {
+  const empty = $('#find-empty');
+  if (!q.trim()) {
+    findHits = [];
+    findPage = 0;
+    $('#find-results').innerHTML = '';
+    $('#find-pager').classList.add('hidden');
+    empty.textContent = 'Type to search nodes, memories, apps, and more.';
+    empty.classList.remove('hidden');
     return;
   }
-  el.textContent = message;
-  el.className = `status ${kind}`;
-  el.classList.remove('hidden');
-}
-
-function handleUnauthorized() {
-  showView('signedout');
-}
-
-// ── initialization ───────────────────────────────────────────────────────────
-
-async function init() {
-  showView('loading');
   try {
-    const { signedIn } = await bg('getAuthState');
-    if (!signedIn) return showView('signedout');
-    await initForm();
+    const { hits } = await bg('search', { query: q });
+    findHits = hits;
+    findPage = 0;
+    if (!hits.length) {
+      $('#find-results').innerHTML = '';
+      $('#find-pager').classList.add('hidden');
+      empty.textContent = `No results for “${q}”.`;
+      empty.classList.remove('hidden');
+      return;
+    }
+    renderFindPage();
   } catch (err) {
-    console.error(err);
-    showView('signedout');
+    if (err.unauthorized) return handleUnauthorized();
+    findHits = [];
+    $('#find-results').innerHTML = '';
+    $('#find-pager').classList.add('hidden');
+    empty.textContent = err.message;
+    empty.classList.remove('hidden');
+  }
+}
+// Typing searches after a short debounce; the submit button / Enter search now.
+const runFind = debounce(performFind, 250);
+
+// Client-side pagination (page size 10) over the fetched hits. The server-side
+// offset/total counterpart is tracked in hadron-server#465.
+function renderFindPage() {
+  const list = $('#find-results');
+  const pager = $('#find-pager');
+  $('#find-empty').classList.add('hidden');
+  list.innerHTML = '';
+
+  const pages = Math.ceil(findHits.length / FIND_PAGE_SIZE);
+  findPage = Math.max(0, Math.min(findPage, pages - 1));
+  const start = findPage * FIND_PAGE_SIZE;
+  const slice = findHits.slice(start, start + FIND_PAGE_SIZE);
+
+  for (const h of slice) {
+    list.appendChild(
+      rowEl(
+        { title: h.name || h.urn || h.id, badge: h.entityType, urn: h.urn, sub: h.description },
+        () => openDetail(hitToDetail(h)),
+      ),
+    );
+  }
+
+  if (findHits.length > FIND_PAGE_SIZE) {
+    pager.classList.remove('hidden');
+    $('#find-range').textContent = `${start + 1}–${start + slice.length} of ${findHits.length}`;
+    $('#find-prev').disabled = findPage === 0;
+    $('#find-next').disabled = findPage >= pages - 1;
+  } else {
+    pager.classList.add('hidden');
   }
 }
 
-async function initForm() {
-  [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+// ── Import tab ───────────────────────────────────────────────────────────────
+
+let importReady = false;
+let activeTab = null;
+
+async function initImport() {
+  if (importReady) return;
+  importReady = true;
+  activeTab = await getActiveTab();
   if (activeTab) {
     $('#page-title').textContent = activeTab.title || '(untitled)';
     $('#page-url').textContent = activeTab.url || '';
     $('#name').value = activeTab.title || '';
     $('#loc').value = suggestLoc(activeTab);
   }
-  showView('form');
-
-  // Load memories + apps in parallel.
   try {
-    const [{ memories }, { apps }] = await Promise.all([
-      bg('listMemories'),
-      bg('listApps'),
-    ]);
-    populateMemories(memories);
-    populateApps(apps);
+    const [{ memories }, { apps }] = await Promise.all([bg('listMemories'), bg('listApps')]);
+    fillSelect($('#memory'), memories.map((m) => ({ value: m.id, urn: m.urn, label: `${m.name}${m.class ? '  ·  ' + m.class : ''}` })));
+    fillSelect($('#app'), apps.map((a) => ({ value: a.id, urn: a.urn, label: a.name })), '— none —');
   } catch (err) {
     if (err.unauthorized) return handleUnauthorized();
-    setStatus('err', err.message);
+    setStatus('#import-status', 'err', err.message);
   }
 }
 
-function populateMemories(memories) {
-  const sel = $('#memory');
+function fillSelect(sel, items, placeholder) {
   sel.innerHTML = '';
-  if (!memories.length) {
-    const opt = document.createElement('option');
-    opt.textContent = 'No writable memories';
-    opt.value = '';
-    sel.appendChild(opt);
-    return;
+  if (placeholder) {
+    const o = document.createElement('option');
+    o.value = '';
+    o.textContent = placeholder;
+    sel.appendChild(o);
   }
-  for (const m of memories) {
-    const opt = document.createElement('option');
-    opt.value = m.id;
-    opt.dataset.urn = m.urn || '';
-    opt.textContent = m.name + (m.class ? `  ·  ${m.class}` : '');
-    sel.appendChild(opt);
+  for (const it of items) {
+    const o = document.createElement('option');
+    o.value = it.value;
+    if (it.urn) o.dataset.urn = it.urn;
+    o.textContent = it.label;
+    sel.appendChild(o);
   }
 }
 
-function populateApps(apps) {
-  const sel = $('#app');
-  // Keep the leading "— none —" option.
-  sel.length = 1;
-  for (const a of apps) {
-    const opt = document.createElement('option');
-    opt.value = a.id;
-    opt.dataset.urn = a.urn || '';
-    opt.textContent = a.name;
-    sel.appendChild(opt);
-  }
+function onSourceChange() {
+  const src = document.querySelector('input[name="source"]:checked').value;
+  $('#src-page').classList.toggle('hidden', src !== 'page');
+  $('#src-file').classList.toggle('hidden', src !== 'file');
 }
 
 async function onAppChange() {
   const appId = $('#app').value;
   const taskField = $('#task-field');
   const taskSel = $('#task');
-  taskSel.length = 1; // reset to "— none —"
-  if (!appId) {
-    taskField.classList.add('hidden');
-    return;
-  }
+  taskSel.length = 1;
+  if (!appId) return taskField.classList.add('hidden');
   try {
     const { tasks } = await bg('listAppTasks', { appId });
     for (const t of tasks) {
-      const opt = document.createElement('option');
-      opt.value = t.name; // runTask resolves a task by name
-      opt.textContent = t.name;
-      taskSel.appendChild(opt);
+      const o = document.createElement('option');
+      o.value = t.name;
+      o.textContent = t.name;
+      taskSel.appendChild(o);
     }
     taskField.classList.toggle('hidden', tasks.length === 0);
   } catch (err) {
     if (err.unauthorized) return handleUnauthorized();
-    setStatus('err', err.message);
+    setStatus('#import-status', 'err', err.message);
   }
 }
 
-// ── actions ──────────────────────────────────────────────────────────────────
+const CONTENT_TYPES = {
+  md: 'text/markdown', markdown: 'text/markdown',
+  html: 'text/html', htm: 'text/html',
+  txt: 'text/plain', text: 'text/plain',
+  pdf: 'application/pdf',
+};
+
+function readFile(file) {
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  const contentType = CONTENT_TYPES[ext] || file.type || 'text/plain';
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read the file.'));
+    if (contentType === 'application/pdf') {
+      // Binary → base64 payload (data URL), stripped to raw base64.
+      reader.onload = () => resolve({ content: String(reader.result).split(',')[1] || '', contentType });
+      reader.readAsDataURL(file);
+    } else {
+      reader.onload = () => resolve({ content: String(reader.result), contentType });
+      reader.readAsText(file);
+    }
+  });
+}
+
+async function onImport() {
+  const btn = $('#btn-import');
+  const memorySel = $('#memory');
+  const memoryId = memorySel.value;
+  const memoryUrn = memorySel.selectedOptions[0]?.dataset.urn || '';
+  const loc = $('#loc').value.trim();
+  const name = $('#name').value.trim();
+  const source = document.querySelector('input[name="source"]:checked').value;
+  const taskName = $('#task').value || null;
+
+  setStatus('#import-status', null);
+  if (!memoryId) return setStatus('#import-status', 'err', 'Pick a target memory.');
+  if (!loc) return setStatus('#import-status', 'err', 'Enter a LOC / URN for the node.');
+
+  btn.disabled = true;
+  btn.textContent = 'Importing…';
+  try {
+    if (source === 'file') {
+      const file = $('#file-input').files[0];
+      if (!file) throw new Error('Choose a file to import.');
+      const { content, contentType } = await readFile(file);
+      const { result } = await bg('importFile', {
+        memoryId, loc, name: name || file.name, content, contentType,
+        fileName: file.name, taskUrn: taskName || null,
+      });
+      setStatus('#import-status', 'ok', `Imported ${result?.node?.loc || loc} (${result?.status || 'ok'})`);
+    } else {
+      if (!activeTab) throw new Error('No active tab.');
+      const mode = document.querySelector('input[name="mode"]:checked').value;
+      const resp = await bg('send', {
+        mode, tabId: activeTab.id, tabUrl: activeTab.url, tabTitle: activeTab.title,
+        memoryId, memoryUrn, loc, name, taskName,
+      });
+      const suffix = resp.taskStarted ? ` · task “${taskName}” started` : '';
+      setStatus('#import-status', 'ok', `Saved node ${resp.node.loc}${suffix}`);
+    }
+  } catch (err) {
+    if (err.unauthorized) return handleUnauthorized();
+    setStatus('#import-status', 'err', err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Import to Hadron';
+  }
+}
+
+// ── Tasks tab ────────────────────────────────────────────────────────────────
+
+let allTasks = null;
+
+async function loadTasks() {
+  const empty = $('#tasks-empty');
+  if (allTasks) return renderTasks($('#task-find').value);
+  try {
+    const { tasks } = await bg('listTasks');
+    allTasks = tasks;
+    renderTasks('');
+  } catch (err) {
+    if (err.unauthorized) return handleUnauthorized();
+    empty.textContent = err.message;
+    empty.classList.remove('hidden');
+  }
+}
+
+function renderTasks(filter) {
+  const list = $('#tasks-results');
+  const empty = $('#tasks-empty');
+  const q = (filter || '').toLowerCase();
+  const rows = (allTasks || []).filter(
+    (t) => !q || (t.name || '').toLowerCase().includes(q) || (t.loc || '').toLowerCase().includes(q),
+  );
+  list.innerHTML = '';
+  if (!rows.length) {
+    empty.textContent = allTasks?.length ? 'No tasks match your filter.' : 'No runnable tasks found.';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+  for (const t of rows) {
+    list.appendChild(
+      rowEl({ title: t.name, badge: 'task', urn: t.urn || null, sub: t.loc }, () => openDetail(taskToDetail(t))),
+    );
+  }
+}
+
+// ── Memories tab ─────────────────────────────────────────────────────────────
+// Mirrors the Find tab: a search input + a paginated (page size 10) list. The
+// user's memories all arrive in one call (myMemories), so the search filters
+// them client-side rather than round-tripping.
+
+const MEM_PAGE_SIZE = 10;
+let allMemories = null;
+let memoryFilter = '';
+let memoryPage = 0;
+
+async function loadMemories() {
+  if (allMemories) return renderMemoriesPage();
+  try {
+    const { memories } = await bg('listMemories');
+    allMemories = memories;
+    memoryPage = 0;
+    renderMemoriesPage();
+  } catch (err) {
+    if (err.unauthorized) return handleUnauthorized();
+    $('#memories-pager').classList.add('hidden');
+    const empty = $('#memories-empty');
+    empty.textContent = err.message;
+    empty.classList.remove('hidden');
+  }
+}
+
+function filterMemories(q) {
+  memoryFilter = q || '';
+  memoryPage = 0;
+  renderMemoriesPage();
+}
+
+function renderMemoriesPage() {
+  const list = $('#memories-results');
+  const empty = $('#memories-empty');
+  const pager = $('#memories-pager');
+  const q = memoryFilter.toLowerCase();
+  const filtered = (allMemories || []).filter(
+    (m) => !q || (m.name || '').toLowerCase().includes(q) || (m.urn || '').toLowerCase().includes(q),
+  );
+  list.innerHTML = '';
+  if (!filtered.length) {
+    pager.classList.add('hidden');
+    empty.textContent = allMemories?.length ? 'No memories match your search.' : 'No memories.';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+
+  const pages = Math.ceil(filtered.length / MEM_PAGE_SIZE);
+  memoryPage = Math.max(0, Math.min(memoryPage, pages - 1));
+  const start = memoryPage * MEM_PAGE_SIZE;
+  const slice = filtered.slice(start, start + MEM_PAGE_SIZE);
+  for (const m of slice) {
+    list.appendChild(
+      rowEl({ title: m.name, badge: m.class, urn: m.urn }, () => openDetail(memoryToDetail(m))),
+    );
+  }
+
+  if (filtered.length > MEM_PAGE_SIZE) {
+    pager.classList.remove('hidden');
+    $('#memories-range').textContent = `${start + 1}–${start + slice.length} of ${filtered.length}`;
+    $('#memories-prev').disabled = memoryPage === 0;
+    $('#memories-next').disabled = memoryPage >= pages - 1;
+  } else {
+    pager.classList.add('hidden');
+  }
+}
+
+// ── detail overlay ───────────────────────────────────────────────────────────
+
+function hitToDetail(h) {
+  return {
+    kind: h.entityType,
+    title: h.name || h.urn || h.id,
+    urn: h.urn,
+    portal: portalUrlForUrn(h.urn) || portalUrlForNode(h.memoryId, h.entityType === 'node' ? h.id : null),
+    fields: [
+      h.matchedField && { k: 'Matched', v: h.matchedField },
+    ].filter(Boolean),
+    preview: h.description,
+  };
+}
+
+function taskToDetail(t) {
+  return {
+    kind: 'task',
+    title: t.name,
+    urn: t.urn || null,
+    portal: portalUrlForUrn(t.urn) || portalUrlForNode(t.memoryId, t.id),
+    fields: [
+      { k: 'LOC', v: t.loc, mono: true },
+      t.nodeType && { k: 'Type', v: t.nodeType },
+    ].filter(Boolean),
+    preview: t.abstract,
+    run: { taskName: t.name },
+  };
+}
+
+function memoryToDetail(m) {
+  return {
+    kind: m.class || 'memory',
+    title: m.name,
+    urn: m.urn,
+    portal: portalUrlForUrn(m.urn) || portalUrlForNode(m.id, null),
+    fields: [
+      m.shortDescription && { k: 'Summary', v: m.shortDescription },
+    ].filter(Boolean),
+    preview: m.description || m.shortDescription,
+  };
+}
+
+// SVG markup for the chip's copy/link/check icons (matches the portal's Urn.svelte).
+const ICONS = {
+  copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>',
+  link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>',
+};
+
+/**
+ * The two-tone URN code element (`hrn:` `<type>:` `<bareValue>`), non-interactive.
+ * Shared by the full chip and the compact in-row pill.
+ */
+function urnCodeEl(value, typeHint) {
+  const { type, bareValue, fullUrn } = parseDisplayUrn(value, typeHint);
+  const code = document.createElement('code');
+  code.className = 'urn-code';
+  code.title = fullUrn;
+  const scheme = document.createElement('span');
+  scheme.className = 'urn-scheme';
+  scheme.textContent = `${CANONICAL_SCHEME}:`;
+  const kind = document.createElement('span');
+  kind.className = 'urn-scheme';
+  kind.textContent = `${type}:`;
+  const bare = document.createElement('span');
+  bare.className = 'urn-bare';
+  bare.textContent = bareValue;
+  code.append(scheme, kind, bare);
+  return { code, fullUrn };
+}
+
+/**
+ * Build a portal-style URN chip: `hrn:` `<type>:` `<bareValue>` plus a
+ * Copy-URN button and a Copy-URL button. Mirrors the portal's Urn.svelte.
+ */
+function urnChip(value, typeHint) {
+  const wrap = document.createElement('span');
+  wrap.className = 'urn-chip';
+  const { code, fullUrn } = urnCodeEl(value, typeHint);
+
+  const mkBtn = (icon, title, textToCopy) => {
+    const b = document.createElement('button');
+    b.className = 'urn-btn';
+    b.title = title;
+    b.setAttribute('aria-label', title);
+    b.innerHTML = ICONS[icon];
+    b.addEventListener('click', (e) => {
+      // Don't let a copy click also trigger the enclosing row's open-detail.
+      e.stopPropagation();
+      if (!navigator.clipboard) return;
+      navigator.clipboard.writeText(textToCopy).catch((err) => console.error('Copy failed', err));
+      b.innerHTML = ICONS.check;
+      setTimeout(() => { b.innerHTML = ICONS[icon]; }, 2000);
+    });
+    return b;
+  };
+
+  wrap.append(
+    code,
+    mkBtn('copy', 'Copy URN', fullUrn),
+    mkBtn('link', 'Copy URL', buildResolverUrl(PORTAL_URL, fullUrn)),
+  );
+  return wrap;
+}
+
+function openDetail(item) {
+  $('#detail-kind').textContent = item.kind || '';
+  $('#detail-title').textContent = item.title || '';
+  const body = $('#detail-body');
+  body.innerHTML = '';
+  if (item.urn) {
+    const row = document.createElement('div');
+    row.className = 'detail-row';
+    row.innerHTML = '<span class="k">URN</span>';
+    row.appendChild(urnChip(item.urn));
+    body.appendChild(row);
+  }
+  for (const f of item.fields || []) {
+    const row = document.createElement('div');
+    row.className = 'detail-row';
+    row.innerHTML = `<span class="k"></span><span class="v${f.mono ? ' mono' : ''}"></span>`;
+    row.querySelector('.k').textContent = f.k;
+    row.querySelector('.v').textContent = f.v;
+    body.appendChild(row);
+  }
+  if (item.preview) {
+    const pre = document.createElement('div');
+    pre.className = 'detail-preview';
+    pre.textContent = item.preview;
+    body.appendChild(pre);
+  }
+
+  const portal = $('#detail-portal');
+  if (item.portal) {
+    portal.classList.remove('hidden');
+    portal.href = item.portal;
+  } else {
+    portal.classList.add('hidden');
+  }
+
+  const runBtn = $('#detail-run');
+  setStatus('#detail-status', null);
+  if (item.run) {
+    runBtn.classList.remove('hidden');
+    runBtn.onclick = () => runDetailTask(item.run, runBtn);
+  } else {
+    runBtn.classList.add('hidden');
+    runBtn.onclick = null;
+  }
+
+  // Detail overlay uses the header's Back button; swap brand → Back.
+  $('#brand').classList.add('hidden');
+  $('#header-back').classList.remove('hidden');
+  views.app.classList.add('hidden');
+  $('#detail').classList.remove('hidden');
+}
+
+async function runDetailTask(run, btn) {
+  btn.disabled = true;
+  btn.textContent = 'Running…';
+  setStatus('#detail-status', null);
+  try {
+    const { result } = await bg('runTask', { taskName: run.taskName });
+    setStatus('#detail-status', 'ok', typeof result === 'string' && result ? result.slice(0, 400) : 'Task run.');
+  } catch (err) {
+    if (err.unauthorized) return handleUnauthorized();
+    setStatus('#detail-status', 'err', err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Run task';
+  }
+}
+
+function closeDetail() {
+  $('#detail').classList.add('hidden');
+  $('#header-back').classList.add('hidden');
+  $('#brand').classList.remove('hidden');
+  views.app.classList.remove('hidden');
+}
+
+// ── status util ──────────────────────────────────────────────────────────────
+
+function setStatus(sel, kind, message) {
+  const el = $(sel);
+  if (!kind) { el.classList.add('hidden'); el.textContent = ''; return; }
+  el.textContent = message;
+  el.className = `status ${kind}`;
+  el.classList.remove('hidden');
+}
+
+// ── auth actions ─────────────────────────────────────────────────────────────
 
 async function onSignIn() {
   const btn = $('#btn-signin');
@@ -175,10 +716,9 @@ async function onSignIn() {
   btn.textContent = 'Signing in…';
   try {
     await bg('signIn');
-    await initForm();
+    enterApp();
   } catch (err) {
     console.error(err);
-    setStatus('err', err.message);
     showView('signedout');
   } finally {
     btn.disabled = false;
@@ -187,58 +727,48 @@ async function onSignIn() {
 }
 
 async function onSignOut() {
+  try { await bg('signOut'); } finally { showView('signedout'); }
+}
+
+// ── init ─────────────────────────────────────────────────────────────────────
+
+function enterApp() {
+  showView('app');
+  showTab('find');
+}
+
+async function init() {
+  // wiring
+  $('#btn-signin').addEventListener('click', onSignIn);
+  $('#btn-signout').addEventListener('click', onSignOut);
+  $$('.tab').forEach((t) => t.addEventListener('click', () => showTab(t.dataset.tab)));
+  $('#find-input').addEventListener('input', (e) => runFind(e.target.value));
+  $('#find-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') performFind(e.target.value); });
+  $('#find-submit').addEventListener('click', () => performFind($('#find-input').value));
+  $('#find-prev').addEventListener('click', () => { findPage--; renderFindPage(); });
+  $('#find-next').addEventListener('click', () => { findPage++; renderFindPage(); });
+  $('#task-find').addEventListener('input', (e) => renderTasks(e.target.value));
+  $('#task-find').addEventListener('keydown', (e) => { if (e.key === 'Enter') renderTasks(e.target.value); });
+  $('#task-submit').addEventListener('click', () => renderTasks($('#task-find').value));
+  $('#memories-find').addEventListener('input', (e) => filterMemories(e.target.value));
+  $('#memories-find').addEventListener('keydown', (e) => { if (e.key === 'Enter') filterMemories(e.target.value); });
+  $('#memories-submit').addEventListener('click', () => filterMemories($('#memories-find').value));
+  $('#memories-prev').addEventListener('click', () => { memoryPage--; renderMemoriesPage(); });
+  $('#memories-next').addEventListener('click', () => { memoryPage++; renderMemoriesPage(); });
+  $$('input[name="source"]').forEach((r) => r.addEventListener('change', onSourceChange));
+  $('#app').addEventListener('change', onAppChange);
+  $('#btn-import').addEventListener('click', onImport);
+  $('#header-back').addEventListener('click', closeDetail);
+
+  showView('loading');
   try {
-    await bg('signOut');
-  } finally {
+    const { signedIn } = await bg('getAuthState');
+    if (signedIn) enterApp();
+    else showView('signedout');
+  } catch (err) {
+    console.error(err);
     showView('signedout');
   }
 }
-
-async function onSend() {
-  const btn = $('#btn-send');
-  const memorySel = $('#memory');
-  const memoryId = memorySel.value;
-  const memoryUrn = memorySel.selectedOptions[0]?.dataset.urn || '';
-  const loc = $('#loc').value.trim();
-  const name = $('#name').value.trim();
-  const mode = document.querySelector('input[name="mode"]:checked').value;
-  const taskName = $('#task').value || null;
-
-  setStatus(null);
-  if (!memoryId) return setStatus('err', 'Pick a target memory.');
-  if (!loc) return setStatus('err', 'Enter a LOC / URN for the node.');
-  if (!activeTab) return setStatus('err', 'No active tab.');
-
-  btn.disabled = true;
-  btn.textContent = 'Sending…';
-  try {
-    const resp = await bg('send', {
-      mode,
-      tabId: activeTab.id,
-      tabUrl: activeTab.url,
-      tabTitle: activeTab.title,
-      memoryId,
-      memoryUrn,
-      loc,
-      name,
-      taskName,
-    });
-    const suffix = resp.taskStarted ? ` · task “${taskName}” started` : '';
-    setStatus('ok', `Saved node ${resp.node.loc}${suffix}`);
-  } catch (err) {
-    if (err.unauthorized) return handleUnauthorized();
-    setStatus('err', err.message);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'Send to Hadron';
-  }
-}
-
-// ── wiring ───────────────────────────────────────────────────────────────────
-
-$('#btn-signin').addEventListener('click', onSignIn);
-$('#btn-signout').addEventListener('click', onSignOut);
-$('#btn-send').addEventListener('click', onSend);
-$('#app').addEventListener('change', onAppChange);
 
 init();

@@ -8,8 +8,12 @@
   </head>
   <body>
     <header class="topbar">
-      <img src="icons/icon-32.png" alt="" class="logo" />
-      <span class="title">Hadron Chrome Extension</span>
+      <button id="header-back" class="linkbtn hidden">‹ Back</button>
+      <span id="brand" class="brand">
+        <img src="icons/icon-32.png" alt="" class="logo" />
+        <span class="title">Hadron</span>
+      </span>
+      <button id="btn-signout" class="linkbtn topbar-right hidden">Sign out</button>
     </header>
 
     <!-- Loading -->
@@ -19,66 +23,155 @@
 
     <!-- Signed out -->
     <section id="view-signedout" class="view hidden">
-      <p class="muted">Sign in with your Hadron account to clip pages.</p>
+      <p class="muted">Sign in with your Hadron account to get started.</p>
       <button id="btn-signin" class="primary">Sign in to Hadron</button>
     </section>
 
-    <!-- Capture form -->
-    <section id="view-form" class="view hidden">
-      <div class="page-info">
-        <div id="page-title" class="page-title"></div>
-        <div id="page-url" class="page-url muted"></div>
+    <!-- Signed-in app -->
+    <section id="view-app" class="view hidden">
+      <nav class="tabs" role="tablist">
+        <button class="tab" role="tab" data-tab="find">Find</button>
+        <button class="tab" role="tab" data-tab="import">Import</button>
+        <button class="tab" role="tab" data-tab="tasks">Tasks</button>
+        <button class="tab" role="tab" data-tab="memories">Memories</button>
+      </nav>
+
+      <!-- Find -->
+      <div class="panel" data-panel="find">
+        <div class="searchbar">
+          <span class="searchbar-input">
+            <span class="search-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg></span>
+            <input id="find-input" type="search" class="search" placeholder="Search Hadron…" autocomplete="off" />
+          </span>
+          <button id="find-submit" class="search-submit" title="Search" aria-label="Search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg></button>
+        </div>
+        <div id="find-results" class="list"></div>
+        <div id="find-pager" class="pager hidden">
+          <button id="find-prev" class="pager-btn">‹ Prev</button>
+          <span id="find-range" class="pager-range"></span>
+          <button id="find-next" class="pager-btn">Next ›</button>
+        </div>
+        <p id="find-empty" class="muted list-empty">Type to search nodes, memories, apps, and more.</p>
       </div>
 
-      <fieldset class="field">
-        <legend>Send</legend>
-        <label class="radio">
-          <input type="radio" name="mode" value="url" checked />
-          <span>Page URL</span>
+      <!-- Import -->
+      <div class="panel hidden" data-panel="import">
+        <fieldset class="field">
+          <legend>Source</legend>
+          <label class="radio">
+            <input type="radio" name="source" value="page" checked />
+            <span>Current page</span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="source" value="file" />
+            <span>Local file</span>
+          </label>
+        </fieldset>
+
+        <!-- Current-page source -->
+        <div id="src-page">
+          <div class="page-info">
+            <div id="page-title" class="page-title"></div>
+            <div id="page-url" class="page-url muted"></div>
+          </div>
+          <fieldset class="field">
+            <legend>Send as</legend>
+            <label class="radio">
+              <input type="radio" name="mode" value="url" checked />
+              <span>Page URL</span>
+            </label>
+            <label class="radio">
+              <input type="radio" name="mode" value="html" />
+              <span>Full HTML content</span>
+            </label>
+          </fieldset>
+        </div>
+
+        <!-- File source -->
+        <div id="src-file" class="hidden">
+          <label class="field">
+            <span class="label">File (MD, HTML, TEXT, PDF)</span>
+            <input id="file-input" type="file" accept=".md,.markdown,.html,.htm,.txt,.text,.pdf" />
+          </label>
+          <p class="muted hint" id="import-note">
+            Local-file import uses the new <code>importNode</code> API, which is
+            not live on the server yet — sending will report that until it ships.
+          </p>
+        </div>
+
+        <label class="field">
+          <span class="label">Target memory</span>
+          <select id="memory"></select>
         </label>
-        <label class="radio">
-          <input type="radio" name="mode" value="html" />
-          <span>Full HTML content</span>
+
+        <label class="field">
+          <span class="label">Node name</span>
+          <input id="name" type="text" placeholder="Node name" />
         </label>
-      </fieldset>
 
-      <label class="field">
-        <span class="label">Target memory</span>
-        <select id="memory"></select>
-      </label>
+        <label class="field">
+          <span class="label">LOC / URN</span>
+          <input id="loc" type="text" placeholder="e.g. web:captured:my-page" spellcheck="false" />
+        </label>
 
-      <label class="field">
-        <span class="label">Node name</span>
-        <input id="name" type="text" placeholder="Node name" />
-      </label>
+        <label class="field">
+          <span class="label">Process with app <span class="muted">(optional)</span></span>
+          <select id="app"><option value="">— none —</option></select>
+        </label>
 
-      <label class="field">
-        <span class="label">LOC / URN</span>
-        <input id="loc" type="text" placeholder="e.g. web:captured:my-page" spellcheck="false" />
-      </label>
+        <label class="field hidden" id="task-field">
+          <span class="label">Task</span>
+          <select id="task"><option value="">— none —</option></select>
+        </label>
 
-      <label class="field">
-        <span class="label">Process with app <span class="muted">(optional)</span></span>
-        <select id="app">
-          <option value="">— none —</option>
-        </select>
-      </label>
+        <div id="import-status" class="status hidden" role="status" aria-live="polite"></div>
+        <button id="btn-import" class="primary">Import to Hadron</button>
+      </div>
 
-      <label class="field hidden" id="task-field">
-        <span class="label">Task</span>
-        <select id="task">
-          <option value="">— none —</option>
-        </select>
-      </label>
+      <!-- Tasks -->
+      <div class="panel hidden" data-panel="tasks">
+        <div class="searchbar">
+          <span class="searchbar-input">
+            <span class="search-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg></span>
+            <input id="task-find" type="search" class="search" placeholder="Quick find tasks…" autocomplete="off" />
+          </span>
+          <button id="task-submit" class="search-submit" title="Find" aria-label="Find"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg></button>
+        </div>
+        <div id="tasks-results" class="list"></div>
+        <p id="tasks-empty" class="muted list-empty hidden">No runnable tasks found.</p>
+      </div>
 
-      <div id="status" class="status hidden" role="status" aria-live="polite"></div>
+      <!-- Memories -->
+      <div class="panel hidden" data-panel="memories">
+        <div class="searchbar">
+          <span class="searchbar-input">
+            <span class="search-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg></span>
+            <input id="memories-find" type="search" class="search" placeholder="Search memories…" autocomplete="off" />
+          </span>
+          <button id="memories-submit" class="search-submit" title="Search" aria-label="Search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg></button>
+        </div>
+        <div id="memories-results" class="list"></div>
+        <div id="memories-pager" class="pager hidden">
+          <button id="memories-prev" class="pager-btn">‹ Prev</button>
+          <span id="memories-range" class="pager-range"></span>
+          <button id="memories-next" class="pager-btn">Next ›</button>
+        </div>
+        <p id="memories-empty" class="muted list-empty hidden">No memories.</p>
+      </div>
+    </section>
 
-      <button id="btn-send" class="primary">Send to Hadron</button>
-
-      <footer class="footer">
-        <span class="muted">Signed in</span>
-        <button id="btn-signout" class="linkbtn">Sign out</button>
-      </footer>
+    <!-- Detail overlay -->
+    <section id="detail" class="detail hidden">
+      <div class="detail-head">
+        <span id="detail-kind" class="badge"></span>
+      </div>
+      <h2 id="detail-title" class="detail-title"></h2>
+      <div id="detail-body" class="detail-body"></div>
+      <div class="detail-actions">
+        <button id="detail-run" class="primary hidden">Run task</button>
+        <a id="detail-portal" class="btn-secondary" target="_blank" rel="noopener">Open in portal ↗</a>
+      </div>
+      <div id="detail-status" class="status hidden" role="status" aria-live="polite"></div>
     </section>
 
     <script type="module" src="popup.js"></script>

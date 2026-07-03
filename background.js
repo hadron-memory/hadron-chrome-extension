@@ -6,8 +6,11 @@ import {
   listMemories,
   listApps,
   listAppTasks,
+  listTasks,
+  globalSearch,
   createNode,
   runTask,
+  importNode,
   UnauthorizedError,
 } from './lib/api.js';
 import { capturePage } from './lib/capture.js';
@@ -38,6 +41,33 @@ const handlers = {
 
   async listAppTasks({ appId }) {
     return { tasks: await listAppTasks(appId) };
+  },
+
+  async listTasks() {
+    return { tasks: await listTasks() };
+  },
+
+  async search({ query }) {
+    return { hits: await globalSearch(query) };
+  },
+
+  async runTask({ taskName, memory, args }) {
+    return { result: await runTask({ taskName, memory, args }) };
+  },
+
+  // Import a local file via the planned importNode API. Inert (errors
+  // gracefully) until hadron-server#457 ships the field.
+  async importFile({ memoryId, loc, name, content, contentType, fileName, taskUrn }) {
+    const result = await importNode({
+      memoryId,
+      loc,
+      name,
+      content,
+      contentType,
+      properties: { fileName, contentType, importedAt: new Date().toISOString() },
+      taskUrn,
+    });
+    return { result };
   },
 
   // Capture (if needed), create the node, and optionally kick off a task.
