@@ -168,7 +168,7 @@ async function onOrgChange() {
 function resetOrgScopedState() {
   allMemories = null; memoryFilter = ''; memoryPage = 0;
   allTasks = null;
-  findHits = []; findPage = 0; findTotal = 0;
+  findQuery = ''; findPage = 0; findTotal = 0;
   importReady = false;
   $('#find-input').value = '';
   $('#find-results').innerHTML = '';
