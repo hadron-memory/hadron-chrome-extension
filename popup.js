@@ -426,10 +426,14 @@ async function onAppChange() {
   }
 }
 
+// importNode v1 accepts text/html (→ Markdown) and text/markdown (as-is).
+// Plain text is valid Markdown, so .txt is sent as text/markdown (stored as-is)
+// rather than the unsupported text/plain. PDF (application/pdf) isn't accepted
+// yet — hadron-server#488 — and errors gracefully until it ships.
 const CONTENT_TYPES = {
   md: 'text/markdown', markdown: 'text/markdown',
   html: 'text/html', htm: 'text/html',
-  txt: 'text/plain', text: 'text/plain',
+  txt: 'text/markdown', text: 'text/markdown',
   pdf: 'application/pdf',
 };
 
