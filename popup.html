@@ -13,6 +13,7 @@
         <img src="icons/icon-32.png" alt="" class="logo" />
         <span class="title">Hadron</span>
       </span>
+      <select id="org-select" class="org-select hidden" title="Active organization" aria-label="Active organization"></select>
       <button id="btn-signout" class="linkbtn topbar-right hidden">Sign out</button>
     </header>
 
@@ -94,8 +95,8 @@
             <input id="file-input" type="file" accept=".md,.markdown,.html,.htm,.txt,.text,.pdf" />
           </label>
           <p class="muted hint" id="import-note">
-            Local-file import uses the new <code>importNode</code> API, which is
-            not live on the server yet — sending will report that until it ships.
+            HTML, Markdown, and text files import now (HTML is converted to
+            Markdown). PDF support is coming soon.
           </p>
         </div>
 

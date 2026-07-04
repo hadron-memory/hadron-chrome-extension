@@ -65,6 +65,18 @@ body {
 .title { font-weight: 600; }
 .topbar-right { margin-left: auto; }
 #header-back { padding: 3px 8px; }
+.org-select {
+  max-width: 140px;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+.org-select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 
 .view { padding: 14px; }
 

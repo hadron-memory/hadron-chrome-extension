@@ -3,17 +3,30 @@
 
 import { signIn, signOut, isSignedIn } from './lib/oauth.js';
 import {
+  listOrganizations,
   listMemories,
   listApps,
   listAppTasks,
   listTasks,
   globalSearch,
-  createNode,
   runTask,
   importNode,
   UnauthorizedError,
 } from './lib/api.js';
 import { capturePage } from './lib/capture.js';
+
+// Post-import processing: importNode dropped taskUrn (server D12), so running
+// the selected task on the just-imported node is a separate runTask call.
+// Prefer the task's URN (URN bypass); pass the imported node's URN as an arg.
+async function runImportTask(node, { taskName, taskUrn, memory, extraArgs } = {}) {
+  if (!node || (!taskName && !taskUrn)) return null;
+  return runTask({
+    taskName,
+    urn: taskUrn || undefined,
+    memory,
+    args: { nodeUrn: node.urn, nodeLoc: node.loc, ...extraArgs },
+  });
+}
 
 // Route a message to a handler and reply with { ok, data } or { ok:false, error }.
 const handlers = {
@@ -31,90 +44,89 @@ const handlers = {
     return { signedIn: false };
   },
 
-  async listMemories() {
-    return { memories: await listMemories() };
+  async listOrganizations() {
+    return { organizations: await listOrganizations() };
   },
 
-  async listApps() {
-    return { apps: await listApps() };
+  async listMemories({ orgId } = {}) {
+    return { memories: await listMemories(orgId) };
+  },
+
+  async listApps({ orgId } = {}) {
+    return { apps: await listApps(orgId) };
   },
 
   async listAppTasks({ appId }) {
     return { tasks: await listAppTasks(appId) };
   },
 
-  async listTasks() {
-    return { tasks: await listTasks() };
+  async listTasks({ orgId } = {}) {
+    return { tasks: await listTasks(orgId) };
   },
 
-  async search({ query }) {
-    return { hits: await globalSearch(query) };
+  async search({ query, orgId, limit, offset }) {
+    return { ...(await globalSearch(query, { orgId, limit, offset })) };
   },
 
   async runTask({ taskName, memory, urn, args }) {
     return { result: await runTask({ taskName, memory, urn, args }) };
   },
 
-  // Import a local file via the planned importNode API. Inert (errors
-  // gracefully) until hadron-server#457 ships the field.
-  async importFile({ memoryId, loc, name, content, contentType, fileName, taskUrn }) {
+  // Import a local file: inline content → importNode (HTML/Markdown converted
+  // server-side), then optionally run the selected task on the new node.
+  async importFile({ memoryId, loc, name, content, contentType, fileName, taskName, taskUrn }) {
     const result = await importNode({
       memoryId,
       loc,
       name,
       content,
       contentType,
-      properties: { fileName, contentType, importedAt: new Date().toISOString() },
-      taskUrn,
+      properties: { fileName, importedAt: new Date().toISOString() },
     });
-    return { result };
+    const node = result?.node;
+    const taskResult = await runImportTask(node, { taskName, taskUrn });
+    return { node, status: result?.status, taskStarted: Boolean(taskName || taskUrn), taskResult };
   },
 
-  // Capture (if needed), create the node, and optionally kick off a task.
-  async send({ mode, tabId, tabUrl, tabTitle, memoryId, memoryUrn, loc, name, taskName }) {
-    let content;
-    let capturedUrl = tabUrl;
-    let capturedTitle = tabTitle;
+  // Import the current page via importNode:
+  //  - Full HTML → the captured authenticated DOM as inline content
+  //    (contentType text/html; the server converts HTML → Markdown). This is
+  //    the only path that works behind an auth gate — a server-side fetch has
+  //    no user session.
+  //  - URL → hand the URL to the server to fetch + extract (public pages).
+  // Post-import task processing (if any) is a separate runTask call.
+  async send({ mode, tabId, tabUrl, tabTitle, memoryId, memoryUrn, loc, name, taskName, taskUrn }) {
+    const properties = { url: tabUrl, title: tabTitle, mode, capturedAt: new Date().toISOString() };
+    let result;
 
     if (mode === 'html') {
       const page = await capturePage(tabId);
       if (!page) throw new Error('Could not read the page content.');
-      content = page.html;
-      capturedUrl = page.url || tabUrl;
-      capturedTitle = page.title || tabTitle;
+      properties.url = page.url || tabUrl;
+      properties.title = page.title || tabTitle;
+      result = await importNode({
+        memoryId,
+        loc,
+        name,
+        content: page.html,
+        contentType: 'text/html',
+        properties,
+      });
     } else {
-      content = tabUrl;
+      result = await importNode({ memoryId, loc, name, url: tabUrl, properties });
     }
 
-    const node = await createNode({
-      memoryId,
-      loc,
-      name: name || capturedTitle || capturedUrl,
-      content,
-      properties: {
-        url: capturedUrl,
-        title: capturedTitle,
-        mode,
-        capturedAt: new Date().toISOString(),
-      },
+    const node = result?.node;
+    if (!node || !node.loc) throw new Error('Import failed.');
+
+    const taskResult = await runImportTask(node, {
+      taskName,
+      taskUrn,
+      memory: memoryUrn || undefined,
+      extraArgs: { url: properties.url },
     });
 
-    if (!node || !node.loc) {
-      throw new Error('Failed to create the node in Hadron.');
-    }
-
-    let taskResult = null;
-    if (taskName) {
-      // Pass the created node's URN so the task can reference the content.
-      const nodeUrn = memoryUrn ? `${memoryUrn}:${node.loc}` : node.loc;
-      taskResult = await runTask({
-        taskName,
-        memory: memoryUrn || undefined,
-        args: { nodeUrn, nodeLoc: node.loc, url: capturedUrl },
-      });
-    }
-
-    return { node, taskStarted: Boolean(taskName), taskResult };
+    return { node, status: result?.status, taskStarted: Boolean(taskName || taskUrn), taskResult };
   },
 };
 
