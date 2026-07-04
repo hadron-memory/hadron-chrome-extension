@@ -92,12 +92,9 @@ function mockBg(type, extra = {}) {
     listAppTasks: { tasks: tasksAll.filter((t) => t.memoryId === 'm1') },
     search: { hits: scopedHits.slice(off, off + lim), total: scopedHits.length },
     runTask: { result: '• Point one\n• Point two\n• Point three' },
-    send: { node: { loc: extra.loc || 'web:example:clip' }, taskStarted: Boolean(extra.taskName) },
-    importFile: { result: null, ok: false },
+    send: { node: { loc: extra.loc || 'web:example:clip' }, status: 'STORED', taskStarted: Boolean(extra.taskName || extra.taskUrn) },
+    importFile: { node: { loc: extra.loc || 'file:import' }, status: 'STORED', taskStarted: Boolean(extra.taskName || extra.taskUrn) },
   };
-  if (type === 'importFile') {
-    return Promise.reject(Object.assign(new Error('importNode is not available on the server yet (hadron-server#457).'), {}));
-  }
   return Promise.resolve({ ok: true, ...(data[type] || {}) });
 }
 
@@ -462,8 +459,8 @@ async function onImport() {
   const name = $('#name').value.trim();
   const source = $('input[name="source"]:checked').value;
   const taskSel = $('#task');
-  const taskName = taskSel.value || null; // page-import: runTask resolves by name
-  const taskUrn = taskSel.selectedOptions[0]?.dataset.urn || null; // file-import: importNode wants the URN
+  const taskName = taskSel.value || null; // selected task display name (runTask fallback)
+  const taskUrn = taskSel.selectedOptions[0]?.dataset.urn || null; // selected task URN (runTask URN bypass)
 
   setStatus('#import-status', null);
   if (!memoryId) return setStatus('#import-status', 'err', 'Pick a target memory.');
@@ -472,25 +469,26 @@ async function onImport() {
   btn.disabled = true;
   btn.textContent = 'Importing…';
   try {
+    let resp;
     if (source === 'file') {
       const file = $('#file-input').files[0];
       if (!file) throw new Error('Choose a file to import.');
       const { content, contentType } = await readFile(file);
-      const { result } = await bg('importFile', {
+      resp = await bg('importFile', {
         memoryId, loc, name: name || file.name, content, contentType,
-        fileName: file.name, taskUrn,
+        fileName: file.name, taskName, taskUrn,
       });
-      setStatus('#import-status', 'ok', `Imported ${result?.node?.loc || loc} (${result?.status || 'ok'})`);
     } else {
       if (!activeTab) throw new Error('No active tab.');
       const mode = $('input[name="mode"]:checked').value;
-      const resp = await bg('send', {
+      resp = await bg('send', {
         mode, tabId: activeTab.id, tabUrl: activeTab.url, tabTitle: activeTab.title,
-        memoryId, memoryUrn, loc, name, taskName,
+        memoryId, memoryUrn, loc, name, taskName, taskUrn,
       });
-      const suffix = resp.taskStarted ? ` · task “${taskName}” started` : '';
-      setStatus('#import-status', 'ok', `Saved node ${resp.node.loc}${suffix}`);
     }
+    const taskLabel = taskName || (taskUrn ? 'task' : null);
+    const suffix = resp.taskStarted && taskLabel ? ` · ${taskLabel} started` : '';
+    setStatus('#import-status', 'ok', `Imported ${resp.node?.loc || loc}${suffix}`);
   } catch (err) {
     if (err.unauthorized) return handleUnauthorized();
     setStatus('#import-status', 'err', err.message);
