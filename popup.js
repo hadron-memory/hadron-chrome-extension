@@ -534,7 +534,7 @@ function renderTasks(filter) {
   empty.classList.add('hidden');
   for (const t of rows) {
     list.appendChild(
-      rowEl({ title: t.name, badge: 'task', urn: t.urn || null, sub: t.loc }, () => openDetail(taskToDetail(t))),
+      rowEl({ title: t.name, badge: 'task', urn: t.urn || null, sub: t.abstract }, () => openDetail(taskToDetail(t))),
     );
   }
 }
