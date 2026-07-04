@@ -35,12 +35,16 @@ function bg(type, extra = {}) {
 // Mock backend for the dev preview (no Chrome APIs). Returns representative
 // data so the layout renders; never used inside the real extension.
 function mockBg(type, extra = {}) {
-  const memories = [
-    { id: 'm1', urn: 'hrn:memory:acme.com::knowledge-base', name: 'Knowledge Base', class: 'knowledge', shortDescription: 'Shared org knowledge.', description: 'The organization-wide knowledge base: product docs, decisions, and reference material clipped from the web.' },
-    { id: 'm2', urn: 'hrn:memory:acme.com::research', name: 'Research', class: 'group', shortDescription: 'Research notes.', description: 'Working memory for the research team — sources, summaries, and in-progress findings.' },
-    { id: 'm3', urn: 'hrn:memory:holger::personal', name: 'Personal', class: 'personal', shortDescription: 'My private memory.', description: 'Personal, private clips and notes visible only to me.' },
+  const organizations = [
+    { id: 'org1', name: 'Acme', urn: 'hrn:org:acme.com', isVisible: true },
+    { id: 'org2', name: 'Holger (personal)', urn: 'hrn:org:holger', isVisible: null },
+  ];
+  const memoriesAll = [
+    { id: 'm1', organizationId: 'org1', urn: 'hrn:memory:acme.com::knowledge-base', name: 'Knowledge Base', class: 'knowledge', shortDescription: 'Shared org knowledge.', description: 'The organization-wide knowledge base: product docs, decisions, and reference material clipped from the web.' },
+    { id: 'm2', organizationId: 'org1', urn: 'hrn:memory:acme.com::research', name: 'Research', class: 'group', shortDescription: 'Research notes.', description: 'Working memory for the research team — sources, summaries, and in-progress findings.' },
+    { id: 'm3', organizationId: 'org2', urn: 'hrn:memory:holger::personal', name: 'Personal', class: 'personal', shortDescription: 'My private memory.', description: 'Personal, private clips and notes visible only to me.' },
     ...Array.from({ length: 11 }, (_, i) => ({
-      id: `mx${i + 1}`,
+      id: `mx${i + 1}`, organizationId: 'org1',
       urn: `hrn:memory:acme.com::project-${i + 1}`,
       name: `Project ${i + 1}`,
       class: i % 2 === 0 ? 'group' : 'knowledge',
@@ -48,42 +52,45 @@ function mockBg(type, extra = {}) {
       description: `Working memory for project ${i + 1}.`,
     })),
   ];
-  const apps = [
-    { id: 'a1', urn: 'hrn:app:acme.com::research-assistant', name: 'Research Assistant', appType: 'AGENT' },
-    { id: 'a2', urn: 'hrn:app:acme.com::clipper', name: 'Web Clipper', appType: 'AUTOMATION' },
+  const appsAll = [
+    { id: 'a1', organizationId: 'org1', urn: 'hrn:app:acme.com::research-assistant', name: 'Research Assistant', appType: 'AGENT' },
+    { id: 'a2', organizationId: 'org1', urn: 'hrn:app:acme.com::clipper', name: 'Web Clipper', appType: 'AUTOMATION' },
   ];
-  const tasks = [
-    { id: 't1', loc: 'tasks:summarize', urn: 'hrn:node:acme.com::knowledge-base::tasks:summarize', name: 'Summarize content', nodeType: 'task', abstract: 'Summarize the imported page into five bullet points.', memoryId: 'm1' },
-    { id: 't2', loc: 'tasks:extract-links', urn: 'hrn:node:acme.com::knowledge-base::tasks:extract-links', name: 'Extract links', nodeType: 'task', abstract: 'Pull every outbound link out of the page.', memoryId: 'm1' },
-    { id: 't3', loc: 'tasks:tag', urn: 'hrn:node:acme.com::research::tasks:tag', name: 'Auto-tag', nodeType: 'task', abstract: 'Suggest tags for the node from its content.', memoryId: 'm2' },
+  const tasksAll = [
+    { id: 't1', organizationId: 'org1', loc: 'tasks:summarize', urn: 'hrn:node:acme.com::knowledge-base::tasks:summarize', name: 'Summarize content', nodeType: 'task', abstract: 'Summarize the imported page into five bullet points.', memoryId: 'm1' },
+    { id: 't2', organizationId: 'org1', loc: 'tasks:extract-links', urn: 'hrn:node:acme.com::knowledge-base::tasks:extract-links', name: 'Extract links', nodeType: 'task', abstract: 'Pull every outbound link out of the page.', memoryId: 'm1' },
+    { id: 't3', organizationId: 'org1', loc: 'tasks:tag', urn: 'hrn:node:acme.com::research::tasks:tag', name: 'Auto-tag', nodeType: 'task', abstract: 'Suggest tags for the node from its content.', memoryId: 'm2' },
   ];
+  // orgId scoping (server-side in production; emulated here for the preview).
+  const byOrg = (arr) => (extra.orgId ? arr.filter((x) => x.organizationId === extra.orgId) : arr);
+
+  const allHits = extra.query
+    ? [
+        { entityType: 'memory', id: 'm2', organizationId: 'org1', urn: 'hrn:memory:acme.com::research', name: 'Research', description: 'A group memory.', matchedField: 'name', score: 0.95, memoryId: 'm2' },
+        { entityType: 'app', id: 'a1', organizationId: 'org1', urn: 'hrn:app:acme.com::research-assistant', name: 'Research Assistant', description: 'An agent app.', matchedField: 'name', score: 0.9 },
+        ...Array.from({ length: 21 }, (_, i) => ({
+          entityType: 'node', id: `n${i + 1}`, organizationId: 'org1',
+          urn: `hrn:node:acme.com::knowledge-base::web:${extra.query}-${i + 1}`,
+          name: `Result ${i + 1} for “${extra.query}”`,
+          description: i % 2 === 0 ? `A matching node about ${extra.query}.` : '',
+          matchedField: 'content', score: 0.8 - i * 0.01, memoryId: 'm1',
+        })),
+      ]
+    : [];
+  const scopedHits = byOrg(allHits);
+  const off = extra.offset || 0;
+  const lim = extra.limit || 10;
+
   const data = {
     getAuthState: { signedIn: true },
     signIn: { signedIn: true },
     signOut: { signedIn: false },
-    listMemories: { memories },
-    listApps: { apps },
-    listTasks: { tasks },
-    listAppTasks: { tasks: tasks.filter((t) => t.memoryId === 'm1') },
-    search: {
-      // Enough hits to exercise the 10-per-page pager in the preview.
-      hits: (extra.query
-        ? [
-            { entityType: 'memory', id: 'm2', urn: 'hrn:memory:acme.com::research', name: 'Research', description: 'A group memory.', matchedField: 'name', score: 0.95, memoryId: 'm2' },
-            { entityType: 'app', id: 'a1', urn: 'hrn:app:acme.com::research-assistant', name: 'Research Assistant', description: 'An agent app.', matchedField: 'name', score: 0.9 },
-            ...Array.from({ length: 21 }, (_, i) => ({
-              entityType: 'node',
-              id: `n${i + 1}`,
-              urn: `hrn:node:acme.com::knowledge-base::web:${extra.query}-${i + 1}`,
-              name: `Result ${i + 1} for “${extra.query}”`,
-              description: i % 2 === 0 ? `A matching node about ${extra.query}.` : '',
-              matchedField: 'content',
-              score: 0.8 - i * 0.01,
-              memoryId: 'm1',
-            })),
-          ]
-        : []),
-    },
+    listOrganizations: { organizations },
+    listMemories: { memories: byOrg(memoriesAll) },
+    listApps: { apps: byOrg(appsAll) },
+    listTasks: { tasks: byOrg(tasksAll) },
+    listAppTasks: { tasks: tasksAll.filter((t) => t.memoryId === 'm1') },
+    search: { hits: scopedHits.slice(off, off + lim), total: scopedHits.length },
     runTask: { result: '• Point one\n• Point two\n• Point three' },
     send: { node: { loc: extra.loc || 'web:example:clip' }, taskStarted: Boolean(extra.taskName) },
     importFile: { result: null, ok: false },
@@ -102,6 +109,77 @@ async function getActiveTab() {
   return tab || null;
 }
 
+// ── active organization ──────────────────────────────────────────────────────
+// The server read queries (memories/apps/globalSearch/findNodes) take an orgId;
+// we scope every tab to the chosen org and persist the choice locally.
+
+let orgs = [];
+let activeOrgId = null;
+let mockOrgId = null; // preview-only persistence
+
+async function getStoredOrgId() {
+  if (!IN_EXTENSION) return mockOrgId;
+  const o = await chrome.storage.local.get('activeOrgId');
+  return o.activeOrgId || null;
+}
+async function storeOrgId(id) {
+  if (!IN_EXTENSION) { mockOrgId = id; return; }
+  if (id) await chrome.storage.local.set({ activeOrgId: id });
+  else await chrome.storage.local.remove('activeOrgId');
+}
+
+/** Default active org: the stored one if still accessible, else personal, else first. */
+function pickActiveOrg(list, stored) {
+  if (!list.length) return null;
+  if (stored && list.some((o) => o.id === stored)) return stored;
+  const personal = list.find((o) => o.isVisible == null); // isVisible===null marks personal
+  return (personal || list[0]).id;
+}
+
+async function initOrgs() {
+  try {
+    const { organizations } = await bg('listOrganizations');
+    orgs = organizations || [];
+  } catch (err) {
+    if (err.unauthorized) return handleUnauthorized();
+    orgs = []; // non-fatal — fall back to cross-org (orgId null)
+  }
+  activeOrgId = pickActiveOrg(orgs, await getStoredOrgId());
+  const sel = $('#org-select');
+  sel.innerHTML = '';
+  for (const o of orgs) {
+    const opt = document.createElement('option');
+    opt.value = o.id;
+    opt.textContent = o.name;
+    opt.selected = o.id === activeOrgId;
+    sel.appendChild(opt);
+  }
+  sel.classList.toggle('hidden', orgs.length <= 1); // hide when there's nothing to switch
+}
+
+async function onOrgChange() {
+  activeOrgId = $('#org-select').value || null;
+  await storeOrgId(activeOrgId);
+  resetOrgScopedState();
+  showTab(currentTab); // re-fetch the visible tab under the new org
+}
+
+// Clear everything that was fetched under the previous org.
+function resetOrgScopedState() {
+  allMemories = null; memoryFilter = ''; memoryPage = 0;
+  allTasks = null;
+  findHits = []; findPage = 0; findTotal = 0;
+  importReady = false;
+  $('#find-input').value = '';
+  $('#find-results').innerHTML = '';
+  $('#find-pager').classList.add('hidden');
+  $('#tasks-results').innerHTML = '';
+  $('#task-find').value = '';
+  $('#memories-results').innerHTML = '';
+  $('#memories-find').value = '';
+  $('#memories-pager').classList.add('hidden');
+}
+
 // ── views / tabs ─────────────────────────────────────────────────────────────
 
 const views = {
@@ -113,13 +191,17 @@ const views = {
 function showView(name) {
   for (const [key, el] of Object.entries(views)) el.classList.toggle('hidden', key !== name);
   $('#btn-signout').classList.toggle('hidden', name !== 'app');
+  if (name !== 'app') $('#org-select').classList.add('hidden');
   // Any top-level view change leaves the detail overlay + its header back button.
   $('#detail').classList.add('hidden');
   $('#header-back').classList.add('hidden');
   $('#brand').classList.remove('hidden');
 }
 
+let currentTab = 'find';
+
 function showTab(name) {
+  currentTab = name;
   $$('.tab').forEach((t) => {
     const isActive = t.dataset.tab === name;
     t.classList.toggle('active', isActive);
@@ -204,75 +286,73 @@ function rowEl({ title, badge, urn, urnType, sub }, onClick) {
 // ── Find tab ─────────────────────────────────────────────────────────────────
 
 const FIND_PAGE_SIZE = 10;
-let findHits = [];
+let findQuery = '';
 let findPage = 0;
+let findTotal = 0;
 
 async function performFind(q) {
   // An immediate search (submit / Enter) supersedes any pending debounced one.
   if (runFind?.cancel) runFind.cancel();
-  const empty = $('#find-empty');
-  if (!q.trim()) {
-    findHits = [];
-    findPage = 0;
+  findQuery = q.trim();
+  findPage = 0;
+  if (!findQuery) {
     $('#find-results').innerHTML = '';
     $('#find-pager').classList.add('hidden');
+    const empty = $('#find-empty');
     empty.textContent = 'Type to search nodes, memories, apps, and more.';
     empty.classList.remove('hidden');
     return;
   }
-  try {
-    const { hits } = await bg('search', { query: q });
-    findHits = hits;
-    findPage = 0;
-    if (!hits.length) {
-      $('#find-results').innerHTML = '';
-      $('#find-pager').classList.add('hidden');
-      empty.textContent = `No results for “${q}”.`;
-      empty.classList.remove('hidden');
-      return;
-    }
-    renderFindPage();
-  } catch (err) {
-    if (err.unauthorized) return handleUnauthorized();
-    findHits = [];
-    $('#find-results').innerHTML = '';
-    $('#find-pager').classList.add('hidden');
-    empty.textContent = err.message;
-    empty.classList.remove('hidden');
-  }
+  await fetchFindPage();
 }
 // Typing searches after a short debounce; the submit button / Enter search now.
 const runFind = debounce(performFind, 250);
 
-// Client-side pagination (page size 10) over the fetched hits. The server-side
-// offset/total counterpart is tracked in hadron-server#465.
-function renderFindPage() {
+// Server-side pagination: fetch one page of globalSearch (offset/limit + total).
+async function fetchFindPage() {
   const list = $('#find-results');
   const pager = $('#find-pager');
-  $('#find-empty').classList.add('hidden');
-  list.innerHTML = '';
-
-  const pages = Math.ceil(findHits.length / FIND_PAGE_SIZE);
-  findPage = Math.max(0, Math.min(findPage, pages - 1));
-  const start = findPage * FIND_PAGE_SIZE;
-  const slice = findHits.slice(start, start + FIND_PAGE_SIZE);
-
-  for (const h of slice) {
-    list.appendChild(
-      rowEl(
-        { title: h.name || h.urn || h.id, badge: h.entityType, urn: h.urn, sub: h.description },
-        () => openDetail(hitToDetail(h)),
-      ),
-    );
-  }
-
-  if (findHits.length > FIND_PAGE_SIZE) {
-    pager.classList.remove('hidden');
-    $('#find-range').textContent = `${start + 1}–${start + slice.length} of ${findHits.length}`;
-    $('#find-prev').disabled = findPage === 0;
-    $('#find-next').disabled = findPage >= pages - 1;
-  } else {
+  const empty = $('#find-empty');
+  if (!findQuery) return;
+  try {
+    const { hits, total } = await bg('search', {
+      query: findQuery,
+      orgId: activeOrgId,
+      limit: FIND_PAGE_SIZE,
+      offset: findPage * FIND_PAGE_SIZE,
+    });
+    findTotal = total || 0;
+    list.innerHTML = '';
+    if (!hits.length) {
+      pager.classList.add('hidden');
+      empty.textContent = `No results for “${findQuery}”.`;
+      empty.classList.remove('hidden');
+      return;
+    }
+    empty.classList.add('hidden');
+    for (const h of hits) {
+      list.appendChild(
+        rowEl(
+          { title: h.name || h.urn || h.id, badge: h.entityType, urn: h.urn, sub: h.description },
+          () => openDetail(hitToDetail(h)),
+        ),
+      );
+    }
+    const start = findPage * FIND_PAGE_SIZE;
+    if (findTotal > FIND_PAGE_SIZE) {
+      pager.classList.remove('hidden');
+      $('#find-range').textContent = `${start + 1}–${start + hits.length} of ${findTotal}`;
+      $('#find-prev').disabled = findPage === 0;
+      $('#find-next').disabled = (findPage + 1) * FIND_PAGE_SIZE >= findTotal;
+    } else {
+      pager.classList.add('hidden');
+    }
+  } catch (err) {
+    if (err.unauthorized) return handleUnauthorized();
+    list.innerHTML = '';
     pager.classList.add('hidden');
+    empty.textContent = err.message;
+    empty.classList.remove('hidden');
   }
 }
 
@@ -292,7 +372,10 @@ async function initImport() {
     $('#loc').value = suggestLoc(activeTab);
   }
   try {
-    const [{ memories }, { apps }] = await Promise.all([bg('listMemories'), bg('listApps')]);
+    const [{ memories }, { apps }] = await Promise.all([
+      bg('listMemories', { orgId: activeOrgId }),
+      bg('listApps', { orgId: activeOrgId }),
+    ]);
     fillSelect($('#memory'), memories.map((m) => ({ value: m.id, urn: m.urn, label: `${m.name}${m.class ? '  ·  ' + m.class : ''}` })));
     fillSelect($('#app'), apps.map((a) => ({ value: a.id, urn: a.urn, label: a.name })), '— none —');
   } catch (err) {
@@ -425,7 +508,7 @@ async function loadTasks() {
   const empty = $('#tasks-empty');
   if (allTasks) return renderTasks($('#task-find').value);
   try {
-    const { tasks } = await bg('listTasks');
+    const { tasks } = await bg('listTasks', { orgId: activeOrgId });
     allTasks = tasks;
     renderTasks('');
   } catch (err) {
@@ -469,7 +552,7 @@ let memoryPage = 0;
 async function loadMemories() {
   if (allMemories) return renderMemoriesPage();
   try {
-    const { memories } = await bg('listMemories');
+    const { memories } = await bg('listMemories', { orgId: activeOrgId });
     allMemories = memories;
     memoryPage = 0;
     renderMemoriesPage();
@@ -727,7 +810,7 @@ async function onSignIn() {
   btn.textContent = 'Signing in…';
   try {
     await bg('signIn');
-    enterApp();
+    await enterApp();
   } catch (err) {
     console.error(err);
     showView('signedout');
@@ -743,8 +826,9 @@ async function onSignOut() {
 
 // ── init ─────────────────────────────────────────────────────────────────────
 
-function enterApp() {
+async function enterApp() {
   showView('app');
+  await initOrgs(); // load orgs + active-org selection before the first tab fetch
   showTab('find');
 }
 
@@ -756,8 +840,9 @@ async function init() {
   $('#find-input').addEventListener('input', (e) => runFind(e.target.value));
   $('#find-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') performFind(e.target.value); });
   $('#find-submit').addEventListener('click', () => performFind($('#find-input').value));
-  $('#find-prev').addEventListener('click', () => { findPage--; renderFindPage(); });
-  $('#find-next').addEventListener('click', () => { findPage++; renderFindPage(); });
+  $('#find-prev').addEventListener('click', () => { findPage--; fetchFindPage(); });
+  $('#find-next').addEventListener('click', () => { findPage++; fetchFindPage(); });
+  $('#org-select').addEventListener('change', onOrgChange);
   $('#task-find').addEventListener('input', (e) => renderTasks(e.target.value));
   $('#task-find').addEventListener('keydown', (e) => { if (e.key === 'Enter') renderTasks(e.target.value); });
   $('#task-submit').addEventListener('click', () => renderTasks($('#task-find').value));
@@ -778,7 +863,7 @@ async function init() {
   showView('loading');
   try {
     const { signedIn } = await bg('getAuthState');
-    if (signedIn) enterApp();
+    if (signedIn) await enterApp();
     else showView('signedout');
   } catch (err) {
     console.error(err);

@@ -3,6 +3,7 @@
 
 import { signIn, signOut, isSignedIn } from './lib/oauth.js';
 import {
+  listOrganizations,
   listMemories,
   listApps,
   listAppTasks,
@@ -31,24 +32,28 @@ const handlers = {
     return { signedIn: false };
   },
 
-  async listMemories() {
-    return { memories: await listMemories() };
+  async listOrganizations() {
+    return { organizations: await listOrganizations() };
   },
 
-  async listApps() {
-    return { apps: await listApps() };
+  async listMemories({ orgId } = {}) {
+    return { memories: await listMemories(orgId) };
+  },
+
+  async listApps({ orgId } = {}) {
+    return { apps: await listApps(orgId) };
   },
 
   async listAppTasks({ appId }) {
     return { tasks: await listAppTasks(appId) };
   },
 
-  async listTasks() {
-    return { tasks: await listTasks() };
+  async listTasks({ orgId } = {}) {
+    return { tasks: await listTasks(orgId) };
   },
 
-  async search({ query }) {
-    return { hits: await globalSearch(query) };
+  async search({ query, orgId, limit, offset }) {
+    return { ...(await globalSearch(query, { orgId, limit, offset })) };
   },
 
   async runTask({ taskName, memory, urn, args }) {
