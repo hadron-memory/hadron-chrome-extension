@@ -1,34 +1,50 @@
 # Hadron Chrome Extension
 
-A Chrome extension for [Hadron](https://srv.hadronmemory.com). Today it sends the URL or full
-HTML of the page you're viewing to Hadron as a node — optionally handing it to a Hadron App
-task for background processing. More Hadron-in-the-browser capabilities will be added over time.
+A tabbed [Hadron](https://srv.hadronmemory.com) client in your browser toolbar — **Find**,
+**Import**, **Tasks**, and **Memories**. Search your knowledge graph, clip web pages (even ones
+behind a login), browse memories and runnable tasks, and copy URNs / portal links — all from a
+popup.
 
 It authenticates with the same OAuth 2.1 + PKCE + Dynamic Client Registration flow as the
 Hadron CLI and macOS app, and captures content by reading the DOM you're already viewing, so
 pages behind a login you're signed into (a Reddit thread, a private doc) are clipped without a
 second authentication.
 
+## Install
+
+**From the Chrome Web Store (recommended):**
+
+> **[Hadron Chrome Extension on the Chrome Web Store](https://chromewebstore.google.com/detail/enmjdbkfbgakhgkbaihkjjdajdbpbood)**
+> — store ID `enmjdbkfbgakhgkbaihkjjdajdbpbood`
+
+Add it, pin the icon, click it, and **Sign in to Hadron**.
+
 ## Features
 
+- **Find** — cross-entity search (nodes, memories, apps, …) with server-side pagination.
+- **Import** — clip the current page (**URL** or **Full HTML**, captured from your
+  authenticated tab) or a **local file** (MD/HTML/text; PDF coming), stored via `importNode`.
+  Optional **App → task** to process the import.
+- **Tasks** — browse and run runnable task nodes.
+- **Memories** — browse your memories.
+- **Active-organization switcher** — scope every tab to one org.
+- **URN chips** everywhere — copy a node/memory URN or a shareable portal link in one click.
 - **OAuth login** against `srv.hadronmemory.com` via `chrome.identity.launchWebAuthFlow`.
-- **URL or full HTML** — choose per clip.
-- **Target memory** picker (the paginated `memories` query).
-- **LOC / URN + node name** for the created node.
-- **Optional App → task** selection; the chosen runnable task is invoked to process the clip.
 
-## Install (unpacked, for development)
+## Develop (load unpacked)
 
 1. Open `chrome://extensions`.
 2. Enable **Developer mode** (top-right).
 3. Click **Load unpacked** and select this directory.
 4. Pin the "Hadron Chrome Extension" icon and click it.
 
-The extension ID is pinned by the `key` in `manifest.json`, so the OAuth redirect URI is stable:
+The unpacked build pins its ID via the `key` in `manifest.json`, so the OAuth redirect URI is
+stable for local testing (this key is **stripped** from the store build — the store assigns the
+published ID above, and DCR re-registers whichever redirect applies):
 
 ```
-ID:       ccigdjebbcfljhappibfcfgkcmomiccb
-Redirect: https://ccigdjebbcfljhappibfcfgkcmomiccb.chromiumapp.org/
+Dev (unpacked) ID: ccigdjebbcfljhappibfcfgkcmomiccb
+Dev redirect:      https://ccigdjebbcfljhappibfcfgkcmomiccb.chromiumapp.org/
 ```
 
 The extension registers itself with the server (Dynamic Client Registration) the first time you

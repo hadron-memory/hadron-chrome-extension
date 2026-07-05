@@ -4,6 +4,11 @@ Everything needed to fill out the Web Store developer console listing for the
 **Hadron Chrome Extension**. Copy-paste the fields below; complete the checklist
 at the end.
 
+- **Status:** 🟢 LIVE — published v0.1.0.
+- **Store listing:** https://chromewebstore.google.com/detail/enmjdbkfbgakhgkbaihkjjdajdbpbood
+- **Store extension ID:** `enmjdbkfbgakhgkbaihkjjdajdbpbood` (assigned by the store; the
+  published OAuth redirect is `https://enmjdbkfbgakhgkbaihkjjdajdbpbood.chromiumapp.org/`, which
+  DCR registers automatically).
 - **Visibility:** Public
 - **Category:** Productivity
 - **Language:** English (United States)
