@@ -81,6 +81,12 @@ function mockBg(type, extra = {}) {
   const off = extra.offset || 0;
   const lim = extra.limit || 10;
 
+  // Synthesize a plausible node URN for the import preview (real server echoes one).
+  const mockNodeBase = extra.memoryUrn
+    ? extra.memoryUrn.replace(/^hrn:memory:/, 'hrn:node:')
+    : 'hrn:node:acme.com::knowledge-base';
+  const mockNode = (loc) => ({ loc, urn: `${mockNodeBase}::${loc}`, memoryId: extra.memoryId || 'm1' });
+
   const data = {
     getAuthState: { signedIn: true },
     signIn: { signedIn: true },
@@ -92,8 +98,8 @@ function mockBg(type, extra = {}) {
     listAppTasks: { tasks: tasksAll.filter((t) => t.memoryId === 'm1') },
     search: { hits: scopedHits.slice(off, off + lim), total: scopedHits.length },
     runTask: { result: '• Point one\n• Point two\n• Point three' },
-    send: { node: { loc: extra.loc || 'web:example:clip' }, status: 'STORED', taskStarted: Boolean(extra.taskName || extra.taskUrn) },
-    importFile: { node: { loc: extra.loc || 'file:import' }, status: 'STORED', taskStarted: Boolean(extra.taskName || extra.taskUrn) },
+    send: { node: mockNode(extra.loc || 'web:example:clip'), status: 'STORED', taskStarted: Boolean(extra.taskName || extra.taskUrn) },
+    importFile: { node: mockNode(extra.loc || 'file:import'), status: 'STORED', taskStarted: Boolean(extra.taskName || extra.taskUrn) },
   };
   return Promise.resolve({ ok: true, ...(data[type] || {}) });
 }
@@ -123,6 +129,20 @@ async function storeOrgId(id) {
   if (!IN_EXTENSION) { mockOrgId = id; return; }
   if (id) await chrome.storage.local.set({ activeOrgId: id });
   else await chrome.storage.local.remove('activeOrgId');
+}
+
+// Sticky Import target memory: remember the last-picked memory so it's
+// pre-selected next time the Import tab opens (issue #7).
+let mockMemoryId = null; // preview-only persistence
+async function getStoredMemoryId() {
+  if (!IN_EXTENSION) return mockMemoryId;
+  const o = await chrome.storage.local.get('importMemoryId');
+  return o.importMemoryId || null;
+}
+async function storeMemoryId(id) {
+  if (!IN_EXTENSION) { mockMemoryId = id; return; }
+  if (id) await chrome.storage.local.set({ importMemoryId: id });
+  else await chrome.storage.local.remove('importMemoryId');
 }
 
 /** Default active org: the stored one if still accessible, else personal, else first. */
@@ -167,6 +187,7 @@ function resetOrgScopedState() {
   allTasks = null;
   findQuery = ''; findPage = 0; findTotal = 0;
   importReady = false;
+  resetImportResult(); // drop any stale success block from the previous org
   $('#find-input').value = '';
   $('#find-results').innerHTML = '';
   $('#find-pager').classList.add('hidden');
@@ -375,6 +396,11 @@ async function initImport() {
     ]);
     fillSelect($('#memory'), memories.map((m) => ({ value: m.id, urn: m.urn, label: `${m.name}${m.class ? '  ·  ' + m.class : ''}` })));
     fillSelect($('#app'), apps.map((a) => ({ value: a.id, urn: a.urn, label: a.name })), '— none —');
+    // Restore the last-used target memory if it's still available (issue #7).
+    const storedMemoryId = await getStoredMemoryId();
+    if (storedMemoryId && memories.some((m) => m.id === storedMemoryId)) {
+      $('#memory').value = storedMemoryId;
+    }
   } catch (err) {
     if (err.unauthorized) return handleUnauthorized();
     setStatus('#import-status', 'err', err.message);
@@ -467,6 +493,7 @@ async function onImport() {
   const taskUrn = taskSel.selectedOptions[0]?.dataset.urn || null; // selected task URN (runTask URN bypass)
 
   setStatus('#import-status', null);
+  resetImportResult();
   if (!memoryId) return setStatus('#import-status', 'err', 'Pick a target memory.');
   if (!loc) return setStatus('#import-status', 'err', 'Enter a LOC / URN for the node.');
 
@@ -479,7 +506,7 @@ async function onImport() {
       if (!file) throw new Error('Choose a file to import.');
       const { content, contentType } = await readFile(file);
       resp = await bg('importFile', {
-        memoryId, loc, name: name || file.name, content, contentType,
+        memoryId, memoryUrn, loc, name: name || file.name, content, contentType,
         fileName: file.name, taskName, taskUrn,
       });
     } else {
@@ -490,16 +517,62 @@ async function onImport() {
         memoryId, memoryUrn, loc, name, taskName, taskUrn,
       });
     }
-    const taskLabel = taskName || (taskUrn ? 'task' : null);
-    const suffix = resp.taskStarted && taskLabel ? ` · ${taskLabel} started` : '';
-    setStatus('#import-status', 'ok', `Imported ${resp.node?.loc || loc}${suffix}`);
+    await storeMemoryId(memoryId); // remember the target for next time (issue #7)
+    // Success: render the URN chip + Open button and keep the button disabled so
+    // it's clear a second press isn't needed (issue #8). Editing any field
+    // (see the reset wiring in init) clears this and re-enables importing.
+    showImportResult(resp.node, loc);
+    btn.textContent = 'Imported ✓';
   } catch (err) {
-    if (err.unauthorized) return handleUnauthorized();
-    setStatus('#import-status', 'err', err.message);
-  } finally {
     btn.disabled = false;
     btn.textContent = 'Import to Hadron';
+    if (err.unauthorized) return handleUnauthorized();
+    setStatus('#import-status', 'err', err.message);
   }
+}
+
+// Show the post-import success block: green message, the node's URN rendered the
+// same way as elsewhere (copy-URN / copy-URL buttons), and an Open-in-portal
+// button. Falls back to the plain LOC when the server didn't echo a URN.
+function showImportResult(node, loc) {
+  const urn = node?.urn || null;
+  const urnBox = $('#import-result-urn');
+  urnBox.innerHTML = '';
+  if (urn) {
+    urnBox.appendChild(urnChip(urn));
+    urnBox.classList.remove('hidden');
+  } else {
+    urnBox.textContent = node?.loc || loc;
+    urnBox.classList.remove('hidden');
+  }
+
+  const portal = $('#import-result-portal');
+  // Fall back to the target memory (from the picker) when the server echoed no
+  // node URN, so "Open in portal" still links somewhere useful.
+  const href = portalUrlForUrn(urn) || portalUrlForNode(node?.memoryId || $('#memory').value, node?.id);
+  if (href) {
+    portal.href = href;
+    portal.classList.remove('hidden');
+  } else {
+    portal.classList.add('hidden');
+  }
+
+  $('#import-status').classList.add('hidden');
+  $('#import-result').classList.remove('hidden');
+}
+
+// Clear the success block and re-enable the Import button — called when the user
+// edits an import field after a completed import. Also drops any stale error
+// status so it clears the moment the user starts fixing the input.
+function resetImportResult() {
+  setStatus('#import-status', null);
+  const result = $('#import-result');
+  if (result.classList.contains('hidden')) return;
+  result.classList.add('hidden');
+  $('#import-result-urn').innerHTML = '';
+  const btn = $('#btn-import');
+  btn.disabled = false;
+  btn.textContent = 'Import to Hadron';
 }
 
 // ── Tasks tab ────────────────────────────────────────────────────────────────
@@ -853,12 +926,20 @@ async function init() {
   $('#memories-submit').addEventListener('click', () => filterMemories($('#memories-find').value));
   $('#memories-prev').addEventListener('click', () => { memoryPage--; renderMemoriesPage(); });
   $('#memories-next').addEventListener('click', () => { memoryPage++; renderMemoriesPage(); });
-  $$('input[name="source"]').forEach((r) => r.addEventListener('change', onSourceChange));
+  $$('input[name="source"]').forEach((r) => r.addEventListener('change', () => { onSourceChange(); resetImportResult(); }));
   $('#file-input').addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (file) $('#name').value = file.name;
+    resetImportResult();
   });
-  $('#app').addEventListener('change', onAppChange);
+  $('#app').addEventListener('change', () => { onAppChange(); resetImportResult(); });
+  $('#task').addEventListener('change', resetImportResult);
+  // Persist the target memory (issue #7); editing any field clears a prior
+  // import result and re-enables the button (issue #8).
+  $('#memory').addEventListener('change', (e) => { storeMemoryId(e.target.value); resetImportResult(); });
+  $('#loc').addEventListener('input', resetImportResult);
+  $('#name').addEventListener('input', resetImportResult);
+  $$('input[name="mode"]').forEach((r) => r.addEventListener('change', resetImportResult));
   $('#btn-import').addEventListener('click', onImport);
   $('#header-back').addEventListener('click', closeDetail);
 

@@ -126,6 +126,14 @@
         </label>
 
         <div id="import-status" class="status hidden" role="status" aria-live="polite"></div>
+
+        <!-- Success result: green message + URN chip (copy buttons) + Open button -->
+        <div id="import-result" class="import-result hidden" role="status" aria-live="polite">
+          <div class="status ok import-result-msg">Successfully imported into Hadron!</div>
+          <div id="import-result-urn" class="import-result-urn"></div>
+          <a id="import-result-portal" class="btn-secondary hidden" target="_blank" rel="noopener">Open in portal ↗</a>
+        </div>
+
         <button id="btn-import" class="primary">Import to Hadron</button>
       </div>
 
