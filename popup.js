@@ -187,6 +187,7 @@ function resetOrgScopedState() {
   allTasks = null;
   findQuery = ''; findPage = 0; findTotal = 0;
   importReady = false;
+  resetImportResult(); // drop any stale success block from the previous org
   $('#find-input').value = '';
   $('#find-results').innerHTML = '';
   $('#find-pager').classList.add('hidden');
@@ -546,7 +547,9 @@ function showImportResult(node, loc) {
   }
 
   const portal = $('#import-result-portal');
-  const href = portalUrlForUrn(urn) || portalUrlForNode(node?.memoryId, node?.id);
+  // Fall back to the target memory (from the picker) when the server echoed no
+  // node URN, so "Open in portal" still links somewhere useful.
+  const href = portalUrlForUrn(urn) || portalUrlForNode(node?.memoryId || $('#memory').value, node?.id);
   if (href) {
     portal.href = href;
     portal.classList.remove('hidden');
@@ -559,8 +562,10 @@ function showImportResult(node, loc) {
 }
 
 // Clear the success block and re-enable the Import button — called when the user
-// edits an import field after a completed import.
+// edits an import field after a completed import. Also drops any stale error
+// status so it clears the moment the user starts fixing the input.
 function resetImportResult() {
+  setStatus('#import-status', null);
   const result = $('#import-result');
   if (result.classList.contains('hidden')) return;
   result.classList.add('hidden');
@@ -927,7 +932,8 @@ async function init() {
     if (file) $('#name').value = file.name;
     resetImportResult();
   });
-  $('#app').addEventListener('change', onAppChange);
+  $('#app').addEventListener('change', () => { onAppChange(); resetImportResult(); });
+  $('#task').addEventListener('change', resetImportResult);
   // Persist the target memory (issue #7); editing any field clears a prior
   // import result and re-enables the button (issue #8).
   $('#memory').addEventListener('change', (e) => { storeMemoryId(e.target.value); resetImportResult(); });
