@@ -185,29 +185,41 @@ async function storeTask(val) {
   else await chrome.storage.local.remove('importTaskValue');
 }
 
-// Recent Import targets: a short MRU list of (memory, LOC-prefix) pairs so a
-// frequently-used parent can be re-picked in one click (issue #12).
-const RECENT_TARGETS_MAX = 6;
-let mockRecentTargets = null; // preview-only persistence
-async function getRecentTargets() {
-  if (!IN_EXTENSION) return mockRecentTargets || [];
-  const o = await chrome.storage.local.get('importRecentTargets');
-  return o.importRecentTargets || [];
+// Import profiles: named bundles of import settings the user can pick in one
+// click (issue #19). Stored locally; supersede the old recent-targets MRU.
+let mockProfiles = null; // preview-only persistence
+let mockActiveProfileId = null;
+async function getProfiles() {
+  if (!IN_EXTENSION) return mockProfiles || [];
+  const o = await chrome.storage.local.get('importProfiles');
+  return o.importProfiles || [];
 }
-async function storeRecentTargets(list) {
-  if (!IN_EXTENSION) { mockRecentTargets = list; return; }
-  await chrome.storage.local.set({ importRecentTargets: list });
+async function storeProfiles(list) {
+  if (!IN_EXTENSION) { mockProfiles = list; return; }
+  await chrome.storage.local.set({ importProfiles: list });
 }
-// Push a just-used target to the front, de-duped by (memory, LOC-prefix).
-async function recordRecentTarget({ memoryId, memoryName, memoryUrn, loc }) {
-  if (!memoryId) return;
-  const locPrefix = locPrefixOf(loc);
-  const entry = { memoryId, memoryName, memoryUrn, locPrefix };
-  const list = (await getRecentTargets()).filter(
-    (t) => !(t.memoryId === memoryId && t.locPrefix === locPrefix),
-  );
-  list.unshift(entry);
-  await storeRecentTargets(list.slice(0, RECENT_TARGETS_MAX));
+async function getActiveProfileId() {
+  if (!IN_EXTENSION) return mockActiveProfileId;
+  const o = await chrome.storage.local.get('importActiveProfileId');
+  return o.importActiveProfileId || null;
+}
+async function storeActiveProfileId(id) {
+  if (!IN_EXTENSION) { mockActiveProfileId = id || null; return; }
+  if (id) await chrome.storage.local.set({ importActiveProfileId: id });
+  else await chrome.storage.local.remove('importActiveProfileId');
+}
+
+// Sticky last-used tab: reopen the popup on whichever tab was last active
+// instead of always Find (issue #19).
+let mockLastTab = null; // preview-only persistence
+async function getStoredLastTab() {
+  if (!IN_EXTENSION) return mockLastTab;
+  const o = await chrome.storage.local.get('lastTab');
+  return o.lastTab || null;
+}
+async function storeLastTab(name) {
+  if (!IN_EXTENSION) { mockLastTab = name || null; return; }
+  if (name) await chrome.storage.local.set({ lastTab: name });
 }
 
 /** Default active org: the stored one if still accessible, else personal, else first. */
@@ -285,6 +297,7 @@ let currentTab = 'find';
 
 function showTab(name) {
   currentTab = name;
+  storeLastTab(name); // reopen here next time (issue #19)
   $$('.tab').forEach((t) => {
     const isActive = t.dataset.tab === name;
     t.classList.toggle('active', isActive);
@@ -309,14 +322,29 @@ function debounce(fn, ms) {
   return debounced;
 }
 
-function slugify(s) {
-  return (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+// Slugify to a compact `[a-z0-9-]` token. When the source is longer than
+// maxLen, truncate at a word boundary (drop the trailing partial word) rather
+// than mid-word, and never end on a hyphen — the server rejects a LOC segment
+// that doesn't start and end with a letter or digit.
+function slugify(s, maxLen = 32) {
+  let out = (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  if (out.length > maxLen) {
+    const cut = out.slice(0, maxLen);
+    out = cut.replace(/-[^-]*$/, '') || cut; // drop a partial last word (keep if one long word)
+  }
+  return out.replace(/-+$/, ''); // never trail on a hyphen
 }
 
-function suggestLoc(tab) {
+// The LOC is composed from a Path (the profile's stable prefix, e.g.
+// `web:reddit`) and a Slug (auto-generated per page). Split of the old
+// single-field suggestLoc (issue #19).
+function suggestPath(tab) {
   let host = 'page';
   try { host = new URL(tab.url).hostname.replace(/^www\./, ''); } catch {}
-  return `web:${slugify(host)}:${slugify(tab.title) || 'clip'}`;
+  return `web:${slugify(host, 24)}`;
+}
+function suggestSlug(tab) {
+  return slugify(tab?.title, 32) || 'clip';
 }
 
 // ── LOC / URN composition helpers (issue #11) ────────────────────────────────
@@ -333,13 +361,20 @@ function isSchemeUrn(s) {
   return /^(hrn|urn):/i.test((s || '').trim());
 }
 
-// Passive hygiene for a plain LOC: drop stray whitespace, collapse doubled
-// colons, and trim leading/trailing colons. Full display URNs (which carry a
-// scheme + `::` separators) are left untouched.
+// Passive hygiene for a plain LOC: drop stray whitespace, then normalize each
+// `:`-separated segment — trim non-alphanumeric edges (so a slug ending in `-`
+// can't produce an invalid segment) and drop empty segments (collapsing doubled
+// colons and leading/trailing colons). Full display URNs (scheme + `::`
+// separators) are left untouched.
 function sanitizeLoc(s) {
   const v = (s || '').trim();
   if (isSchemeUrn(v)) return v; // a full URN (scheme-prefixed) — don't mangle it
-  return v.replace(/\s+/g, '').replace(/:{2,}/g, ':').replace(/^:+|:+$/g, '');
+  return v
+    .replace(/\s+/g, '')
+    .split(':')
+    .map((seg) => seg.replace(/^[^a-z0-9]+/i, '').replace(/[^a-z0-9]+$/i, ''))
+    .filter(Boolean)
+    .join(':');
 }
 
 /** Drop a leading `YYYY-MM-DD ` date prefix from a name. */
@@ -377,12 +412,6 @@ function prefixDateLoc(loc) {
   // Hyphen optional so re-dating a slug that is *only* a date replaces it.
   const cleaned = slug.replace(/^\d{4}-\d{2}-\d{2}-?/, '');
   return `${prefix}${cleaned ? `${todayStr()}-${cleaned}` : todayStr()}`;
-}
-
-/** The parent path of a LOC — everything up to and including the last colon. */
-function locPrefixOf(loc) {
-  const i = (loc || '').lastIndexOf(':');
-  return i >= 0 ? loc.slice(0, i + 1) : '';
 }
 
 function handleUnauthorized() { showView('signedout'); }
@@ -518,15 +547,13 @@ async function initImport() {
     $('#page-title').textContent = activeTab.title || '(untitled)';
     $('#page-url').textContent = activeTab.url || '';
     $('#name').value = activeTab.title || '';
-    $('#loc').value = suggestLoc(activeTab);
+    $('#path').value = suggestPath(activeTab);
+    $('#slug').value = suggestSlug(activeTab);
   }
   // Restore the sticky "prefix with today's date" choice and apply it (issue #11).
   const addDate = await getStoredAddDate();
   $('#add-date').checked = addDate;
-  if (addDate) {
-    $('#name').value = prefixDateName($('#name').value);
-    $('#loc').value = prefixDateLoc($('#loc').value);
-  }
+  if (addDate) applyDateToFields(true);
   try {
     const [{ memories }, { apps }] = await Promise.all([
       bg('listMemories', { orgId: activeOrgId }),
@@ -534,84 +561,176 @@ async function initImport() {
     ]);
     fillSelect($('#memory'), memories.map((m) => ({ value: m.id, urn: m.urn, label: `${m.name}${m.class ? '  ·  ' + m.class : ''}` })));
     fillSelect($('#app'), apps.map((a) => ({ value: a.id, urn: a.urn, label: a.name })), '— none —');
-    // Restore the last-used target memory if it's still available (issue #7).
-    const storedMemoryId = await getStoredMemoryId();
-    if (storedMemoryId && memories.some((m) => m.id === storedMemoryId)) {
-      $('#memory').value = storedMemoryId;
-    }
-    // Restore the sticky app + task selection if still available (issue #17).
-    const storedApp = await getStoredApp();
-    if (storedApp && apps.some((a) => a.id === storedApp)) {
-      $('#app').value = storedApp;
-      await onAppChange(); // load the app's tasks before restoring the task
-      const storedTask = await getStoredTask();
-      if (storedTask && [...$('#task').options].some((o) => o.value === storedTask)) {
-        $('#task').value = storedTask;
-      }
+    await renderProfiles();
+    // A still-valid active profile drives the whole form (issue #19). Otherwise
+    // fall back to the per-field sticky restore for the manual path.
+    const activeId = await getActiveProfileId();
+    const active = activeId && (await getProfiles()).find((p) => p.id === activeId);
+    if (active) {
+      await applyProfile(active);
     } else {
-      await onAppChange(); // no app restored — reset/hide the task field (avoid stale tasks)
+      // Restore the last-used target memory if it's still available (issue #7).
+      const storedMemoryId = await getStoredMemoryId();
+      if (storedMemoryId && memories.some((m) => m.id === storedMemoryId)) {
+        $('#memory').value = storedMemoryId;
+      }
+      // Restore the sticky app + task selection if still available (issue #17).
+      const storedApp = await getStoredApp();
+      if (storedApp && apps.some((a) => a.id === storedApp)) {
+        $('#app').value = storedApp;
+        await onAppChange(); // load the app's tasks before restoring the task
+        const storedTask = await getStoredTask();
+        if (storedTask && [...$('#task').options].some((o) => o.value === storedTask)) {
+          $('#task').value = storedTask;
+        }
+      } else {
+        await onAppChange(); // no app restored — reset/hide the task field
+      }
     }
-    await renderRecentTargets(); // MRU quick-select of (memory, path) pairs (issue #12)
   } catch (err) {
     if (err.unauthorized) return handleUnauthorized();
     setStatus('#import-status', 'err', err.message);
   }
 }
 
-// Populate the "Recent targets" select, hiding it when there's nothing to show.
-// Only targets whose memory still appears in the current org's picker are kept.
-async function renderRecentTargets() {
-  const sel = $('#recent-target');
-  const field = $('#recent-field');
-  sel.length = 1; // keep the placeholder option
-  const memIds = new Set([...$('#memory').options].map((o) => o.value));
-  const usable = (await getRecentTargets()).filter((t) => memIds.has(t.memoryId));
-  for (const t of usable) {
-    const o = document.createElement('option');
-    o.value = JSON.stringify({ memoryId: t.memoryId, locPrefix: t.locPrefix });
-    const name = (t.memoryName || t.memoryId).split('  ·  ')[0]; // drop the class suffix
-    o.textContent = t.locPrefix ? `${name}  ·  ${t.locPrefix}` : name;
-    sel.appendChild(o);
-  }
-  field.classList.toggle('hidden', usable.length === 0);
-  sel.value = '';
+// Apply or strip today's date on the node name and slug per the checkbox state.
+// Idempotent: prefix helpers strip any existing date before re-adding (#11/#16).
+function applyDateToFields(on) {
+  const name = $('#name'), slug = $('#slug');
+  name.value = on ? prefixDateName(name.value) : stripDateName(name.value);
+  slug.value = on ? prefixDateLoc(slug.value) : stripDateLoc(slug.value);
 }
 
-// Apply a picked recent target: select its memory and swap in its LOC parent
-// path while preserving the current final segment.
-function onRecentTargetChange() {
-  const raw = $('#recent-target').value;
-  if (!raw) return;
-  let t;
-  try { t = JSON.parse(raw); } catch { return; }
-  const mem = $('#memory');
-  if (t.memoryId && [...mem.options].some((o) => o.value === t.memoryId)) {
-    mem.value = t.memoryId;
-    storeMemoryId(t.memoryId);
+// ── Import profiles (issue #19) ──────────────────────────────────────────────
+
+// Fill the profile picker, select the active profile, sync the name box and the
+// Delete button's enabled state.
+async function renderProfiles() {
+  const sel = $('#profile');
+  const profiles = await getProfiles();
+  const activeId = await getActiveProfileId();
+  sel.length = 1; // keep the "— No profile —" placeholder
+  for (const p of profiles) {
+    const o = document.createElement('option');
+    o.value = p.id;
+    o.textContent = p.name;
+    sel.appendChild(o);
   }
-  const cur = $('#loc').value.trim();
-  const lastSeg = cur
-    ? cur.slice(cur.lastIndexOf(':') + 1)
-    : (activeTab ? suggestLoc(activeTab).split(':').pop() : 'clip');
-  // Honor the sticky date preference: a stored prefix may or may not already
-  // carry a date, so normalize to the checkbox state either way (issue #11).
-  const rawLoc = `${t.locPrefix}${lastSeg}`;
-  $('#loc').value = $('#add-date').checked ? prefixDateLoc(rawLoc) : stripDateLoc(rawLoc);
+  const active = activeId && profiles.find((p) => p.id === activeId);
+  sel.value = active ? activeId : '';
+  $('#profile-name').value = active ? active.name : '';
+  $('#profile-delete').disabled = !sel.value;
+}
+
+// Apply a profile to the form. Slug + node name stay page-derived; the profile
+// contributes the target memory, path, send-as mode, app/task and date pref.
+async function applyProfile(p) {
+  if (!p) return;
+  const pageRadio = $('input[name="source"][value="page"]');
+  if (pageRadio) { pageRadio.checked = true; onSourceChange(); }
+  const modeRadio = $(`input[name="mode"][value="${p.mode || 'html'}"]`);
+  if (modeRadio) modeRadio.checked = true;
+  if (p.memoryId && [...$('#memory').options].some((o) => o.value === p.memoryId)) {
+    $('#memory').value = p.memoryId;
+    storeMemoryId(p.memoryId);
+  }
+  $('#path').value = p.path || '';
+  $('#app').value = [...$('#app').options].some((o) => o.value === p.appId) ? p.appId : '';
+  storeApp($('#app').value);
+  await onAppChange(); // load the app's tasks before restoring the task
+  if (p.taskValue && [...$('#task').options].some((o) => o.value === p.taskValue)) {
+    $('#task').value = p.taskValue;
+    storeTask(p.taskValue);
+  } else {
+    storeTask('');
+  }
+  $('#add-date').checked = !!p.addDate;
+  storeAddDate(!!p.addDate);
+  applyDateToFields(!!p.addDate);
+  await storeActiveProfileId(p.id);
   resetImportResult();
 }
 
-// Sticky "prefix with today's date" checkbox: add or remove the date prefix on
-// both the name and the LOC, and remember the choice for next time (issue #11).
+// Snapshot the current form as a profile object.
+function collectProfile(name, id) {
+  const memorySel = $('#memory');
+  const taskSel = $('#task');
+  return {
+    id,
+    name,
+    memoryId: memorySel.value,
+    memoryUrn: memorySel.selectedOptions[0]?.dataset.urn || '',
+    memoryName: (memorySel.selectedOptions[0]?.textContent || '').split('  ·  ')[0],
+    path: $('#path').value.trim(),
+    mode: $('input[name="mode"]:checked')?.value || 'html',
+    appId: $('#app').value || '',
+    taskValue: $('#task').value || '',
+    taskUrn: taskSel.selectedOptions[0]?.dataset.urn || '',
+    addDate: $('#add-date').checked,
+  };
+}
+
+// Save = update the selected profile in place, or create a new one.
+async function onSaveProfile() {
+  const name = $('#profile-name').value.trim();
+  if (!name) return setStatus('#import-status', 'err', 'Name the profile before saving.');
+  const profiles = await getProfiles();
+  const selectedId = $('#profile').value;
+  const existing = selectedId && profiles.find((p) => p.id === selectedId);
+  let saved;
+  if (existing) {
+    saved = collectProfile(name, existing.id);
+    profiles[profiles.indexOf(existing)] = saved;
+  } else {
+    saved = collectProfile(name, crypto.randomUUID());
+    profiles.push(saved);
+  }
+  await storeProfiles(profiles);
+  await storeActiveProfileId(saved.id);
+  await renderProfiles();
+  flashSaved($('#profile-save')); // visible confirmation on the button itself
+  setStatus('#import-status', 'ok', `Saved profile “${name}”.`);
+}
+
+// Briefly flash a button to "Saved ✓" to confirm the save landed.
+function flashSaved(btn) {
+  clearTimeout(btn._flashTimer);
+  btn.textContent = 'Saved ✓';
+  btn.classList.add('ok');
+  btn._flashTimer = setTimeout(() => {
+    btn.textContent = 'Save';
+    btn.classList.remove('ok');
+  }, 1600);
+}
+
+async function onDeleteProfile() {
+  const selectedId = $('#profile').value;
+  if (!selectedId) return;
+  await storeProfiles((await getProfiles()).filter((p) => p.id !== selectedId));
+  await storeActiveProfileId(null);
+  await renderProfiles();
+  setStatus('#import-status', 'ok', 'Profile deleted.');
+}
+
+// Selecting a profile applies it; "— No profile —" drops back to manual mode
+// (leaves the current field values as-is).
+async function onProfileSelect() {
+  const id = $('#profile').value;
+  $('#profile-delete').disabled = !id;
+  if (!id) {
+    await storeActiveProfileId(null);
+    $('#profile-name').value = '';
+    return;
+  }
+  const p = (await getProfiles()).find((x) => x.id === id);
+  if (p) { $('#profile-name').value = p.name; await applyProfile(p); }
+}
+
+// Sticky "prefix with today's date" checkbox (issue #11/#16).
 async function onAddDateToggle() {
   const on = $('#add-date').checked;
   await storeAddDate(on);
-  if (on) {
-    $('#name').value = prefixDateName($('#name').value);
-    $('#loc').value = prefixDateLoc($('#loc').value);
-  } else {
-    $('#name').value = stripDateName($('#name').value);
-    $('#loc').value = stripDateLoc($('#loc').value);
-  }
+  applyDateToFields(on);
   resetImportResult();
 }
 
@@ -701,10 +820,11 @@ async function onImport() {
   const memorySel = $('#memory');
   const memoryId = memorySel.value;
   const memoryUrn = memorySel.selectedOptions[0]?.dataset.urn || '';
-  // Enforce the colon sanitizer here too, not just on blur — the user may click
-  // Import without ever blurring the field. Reflect it back into the input.
-  const loc = sanitizeLoc($('#loc').value);
-  $('#loc').value = loc;
+  // Compose the LOC from Path + Slug and sanitize (issue #19). Sanitizing here
+  // (not only on blur) covers clicking Import without leaving the field.
+  const path = $('#path').value.trim();
+  const slug = $('#slug').value.trim();
+  const loc = sanitizeLoc(path ? `${path}:${slug}` : slug);
   const name = $('#name').value.trim();
   const source = $('input[name="source"]:checked').value;
   const taskSel = $('#task');
@@ -714,7 +834,7 @@ async function onImport() {
   setStatus('#import-status', null);
   resetImportResult();
   if (!memoryId) return setStatus('#import-status', 'err', 'Pick a target memory.');
-  if (!loc) return setStatus('#import-status', 'err', 'Enter a LOC / URN for the node.');
+  if (!loc) return setStatus('#import-status', 'err', 'Enter a path or slug for the node.');
 
   btn.disabled = true;
   btn.textContent = 'Importing…';
@@ -737,10 +857,6 @@ async function onImport() {
       });
     }
     await storeMemoryId(memoryId); // remember the target for next time (issue #7)
-    // Record this (memory, path) pair in the recent-targets MRU (issue #12).
-    const memoryName = memorySel.selectedOptions[0]?.textContent || '';
-    await recordRecentTarget({ memoryId, memoryName, memoryUrn, loc });
-    await renderRecentTargets();
     // Success: render the URN chip + Open button and keep the button disabled so
     // it's clear a second press isn't needed (issue #8). Editing any field
     // (see the reset wiring in init) clears this and re-enables importing.
@@ -1124,10 +1240,13 @@ async function onSignOut() {
 
 // ── init ─────────────────────────────────────────────────────────────────────
 
+const TAB_NAMES = ['find', 'import', 'tasks', 'memories'];
+
 async function enterApp() {
   showView('app');
   await initOrgs(); // load orgs + active-org selection before the first tab fetch
-  showTab('find');
+  const last = await getStoredLastTab(); // reopen the last-used tab (issue #19)
+  showTab(TAB_NAMES.includes(last) ? last : 'find');
 }
 
 async function init() {
@@ -1162,10 +1281,14 @@ async function init() {
   // Persist the target memory (issue #7); editing any field clears a prior
   // import result and re-enables the button (issue #8).
   $('#memory').addEventListener('change', (e) => { storeMemoryId(e.target.value); resetImportResult(); });
-  $('#recent-target').addEventListener('change', onRecentTargetChange);
+  // Import profiles (issue #19).
+  $('#profile').addEventListener('change', onProfileSelect);
+  $('#profile-save').addEventListener('click', onSaveProfile);
+  $('#profile-delete').addEventListener('click', onDeleteProfile);
   $('#add-date').addEventListener('change', onAddDateToggle);
-  $('#loc').addEventListener('blur', () => { $('#loc').value = sanitizeLoc($('#loc').value); });
-  $('#loc').addEventListener('input', resetImportResult);
+  $('#slug').addEventListener('blur', () => { $('#slug').value = sanitizeLoc($('#slug').value); });
+  $('#path').addEventListener('input', resetImportResult);
+  $('#slug').addEventListener('input', resetImportResult);
   $('#name').addEventListener('input', resetImportResult);
   $$('input[name="mode"]').forEach((r) => r.addEventListener('change', resetImportResult));
   $('#btn-import').addEventListener('click', onImport);

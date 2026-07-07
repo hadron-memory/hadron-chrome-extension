@@ -69,6 +69,17 @@
           </label>
         </fieldset>
 
+        <!-- Import profile: a saved bundle of import settings (issue #19) -->
+        <div class="field profile-bar">
+          <span class="label">Import profile</span>
+          <select id="profile"><option value="">— No profile —</option></select>
+          <div class="profile-actions">
+            <input id="profile-name" type="text" placeholder="Profile name" spellcheck="false" />
+            <button type="button" id="profile-save" class="linkbtn">Save</button>
+            <button type="button" id="profile-delete" class="linkbtn" disabled>Delete</button>
+          </div>
+        </div>
+
         <!-- Current-page source -->
         <div id="src-page">
           <div class="page-info">
@@ -100,11 +111,6 @@
           </p>
         </div>
 
-        <label class="field hidden" id="recent-field">
-          <span class="label">Recent targets</span>
-          <select id="recent-target"><option value="">— pick a recent memory · path —</option></select>
-        </label>
-
         <label class="field">
           <span class="label">Target memory</span>
           <select id="memory"></select>
@@ -115,13 +121,18 @@
           <input id="name" type="text" placeholder="Node name" />
         </label>
 
+        <label class="field">
+          <span class="label">Path <span class="muted">(profile)</span></span>
+          <input id="path" type="text" placeholder="e.g. web:reddit" spellcheck="false" />
+        </label>
+
         <label class="field loc-field">
-          <span class="label">LOC / URN</span>
-          <input id="loc" type="text" placeholder="e.g. web:captured:my-page" spellcheck="false" />
+          <span class="label">Slug <span class="muted">(auto from page)</span></span>
+          <input id="slug" type="text" placeholder="e.g. my-page" spellcheck="false" />
           <div class="loc-actions">
             <label class="radio">
               <input type="checkbox" id="add-date" />
-              <span>Prefix name &amp; LOC with today's date</span>
+              <span>Prefix name &amp; slug with today's date</span>
             </label>
           </div>
         </label>
