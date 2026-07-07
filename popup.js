@@ -301,12 +301,17 @@ function todayStr() {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+/** A full, scheme-prefixed URN (hrn:/urn:) rather than a plain LOC. */
+function isSchemeUrn(s) {
+  return /^(hrn|urn):/i.test((s || '').trim());
+}
+
 // Passive hygiene for a plain LOC: drop stray whitespace, collapse doubled
 // colons, and trim leading/trailing colons. Full display URNs (which carry a
 // scheme + `::` separators) are left untouched.
 function sanitizeLoc(s) {
   const v = (s || '').trim();
-  if (/^(hrn|urn):/i.test(v)) return v; // a full URN (scheme-prefixed) — don't mangle it
+  if (isSchemeUrn(v)) return v; // a full URN (scheme-prefixed) — don't mangle it
   return v.replace(/\s+/g, '').replace(/:{2,}/g, ':').replace(/^:+|:+$/g, '');
 }
 
@@ -327,6 +332,7 @@ function prefixDateName(name) {
 
 /** Prefix a LOC with a today's-date segment (re-dating replaces an existing one). */
 function prefixDateLoc(loc) {
+  if (isSchemeUrn(loc)) return loc || ''; // never date-prefix a full URN — it'd be invalid
   return `${todayStr()}:${stripDateLoc(loc)}`.replace(/:+$/, ''); // no trailing colon when LOC is empty
 }
 
@@ -532,7 +538,10 @@ function onRecentTargetChange() {
   const lastSeg = cur
     ? cur.slice(cur.lastIndexOf(':') + 1)
     : (activeTab ? suggestLoc(activeTab).split(':').pop() : 'clip');
-  $('#loc').value = `${t.locPrefix}${lastSeg}`;
+  // Honor the sticky date preference: a stored prefix may or may not already
+  // carry a date, so normalize to the checkbox state either way (issue #11).
+  const rawLoc = `${t.locPrefix}${lastSeg}`;
+  $('#loc').value = $('#add-date').checked ? prefixDateLoc(rawLoc) : stripDateLoc(rawLoc);
   resetImportResult();
 }
 
@@ -637,7 +646,10 @@ async function onImport() {
   const memorySel = $('#memory');
   const memoryId = memorySel.value;
   const memoryUrn = memorySel.selectedOptions[0]?.dataset.urn || '';
-  const loc = $('#loc').value.trim();
+  // Enforce the colon sanitizer here too, not just on blur — the user may click
+  // Import without ever blurring the field. Reflect it back into the input.
+  const loc = sanitizeLoc($('#loc').value);
+  $('#loc').value = loc;
   const name = $('#name').value.trim();
   const source = $('input[name="source"]:checked').value;
   const taskSel = $('#task');
