@@ -285,6 +285,11 @@ code { font-size: 11px; background: var(--row-hover); padding: 1px 4px; border-r
 .import-result .import-result-msg { margin: 0; }
 .import-result-urn { display: flex; }
 .import-result .btn-secondary { align-self: flex-start; }
+/* Post-import task-run status line (#21). */
+.import-result-run { font-size: 12px; }
+.import-result-run.ok { color: var(--ok-fg); }
+.import-result-run.err { color: var(--err-fg); }
+.import-result-run.muted { color: var(--muted); }
 
 /* ── detail overlay ─────────────────────────────────────── */
 .detail { padding: 14px; }
