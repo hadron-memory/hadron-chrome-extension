@@ -158,6 +158,33 @@ async function storeAddDate(on) {
   await chrome.storage.local.set({ importAddDate: !!on });
 }
 
+// Sticky App + Task selection: remember the last-picked processing app and
+// task across popup opens, like the target memory (issue #17). The task is
+// keyed by its option value (task name) — restored only if the app still
+// offers it.
+let mockAppId = null; // preview-only persistence
+let mockTaskValue = null;
+async function getStoredApp() {
+  if (!IN_EXTENSION) return mockAppId;
+  const o = await chrome.storage.local.get('importAppId');
+  return o.importAppId || null;
+}
+async function storeApp(id) {
+  if (!IN_EXTENSION) { mockAppId = id || null; return; }
+  if (id) await chrome.storage.local.set({ importAppId: id });
+  else await chrome.storage.local.remove('importAppId');
+}
+async function getStoredTask() {
+  if (!IN_EXTENSION) return mockTaskValue;
+  const o = await chrome.storage.local.get('importTaskValue');
+  return o.importTaskValue || null;
+}
+async function storeTask(val) {
+  if (!IN_EXTENSION) { mockTaskValue = val || null; return; }
+  if (val) await chrome.storage.local.set({ importTaskValue: val });
+  else await chrome.storage.local.remove('importTaskValue');
+}
+
 // Recent Import targets: a short MRU list of (memory, LOC-prefix) pairs so a
 // frequently-used parent can be re-picked in one click (issue #12).
 const RECENT_TARGETS_MAX = 6;
@@ -320,9 +347,20 @@ function stripDateName(name) {
   return (name || '').replace(/^\d{4}-\d{2}-\d{2}\s+/, '');
 }
 
-/** Drop a leading `YYYY-MM-DD:` date segment from a LOC. */
+// Split a LOC into [prefix-through-last-colon, finalSlug]. The date lives on
+// the final slug segment, not in front of the whole LOC (issue #16).
+function splitLocSlug(loc) {
+  const v = loc || '';
+  const i = v.lastIndexOf(':');
+  return i >= 0 ? [v.slice(0, i + 1), v.slice(i + 1)] : ['', v];
+}
+
+/** Drop a leading `YYYY-MM-DD` date from the LOC's final slug segment. */
 function stripDateLoc(loc) {
-  return (loc || '').replace(/^\d{4}-\d{2}-\d{2}:/, '');
+  if (isSchemeUrn(loc)) return loc || ''; // leave full URNs untouched, like prefixDateLoc
+  const [prefix, slug] = splitLocSlug(loc);
+  // Hyphen optional so a slug that is *only* a date (`2026-07-06`) still strips.
+  return `${prefix}${slug.replace(/^\d{4}-\d{2}-\d{2}-?/, '')}`;
 }
 
 /** Prefix a node name with today's date (re-dating replaces an existing prefix). */
@@ -330,10 +368,15 @@ function prefixDateName(name) {
   return `${todayStr()} ${stripDateName(name)}`.trim();
 }
 
-/** Prefix a LOC with a today's-date segment (re-dating replaces an existing one). */
+// Insert today's date in front of the LOC's final slug segment, keeping the
+// LOC prefix intact: `web:reddit:my-page` → `web:reddit:2026-07-06-my-page`
+// (issue #16). Re-dating replaces an existing date; full URNs are left alone.
 function prefixDateLoc(loc) {
   if (isSchemeUrn(loc)) return loc || ''; // never date-prefix a full URN — it'd be invalid
-  return `${todayStr()}:${stripDateLoc(loc)}`.replace(/:+$/, ''); // no trailing colon when LOC is empty
+  const [prefix, slug] = splitLocSlug(loc);
+  // Hyphen optional so re-dating a slug that is *only* a date replaces it.
+  const cleaned = slug.replace(/^\d{4}-\d{2}-\d{2}-?/, '');
+  return `${prefix}${cleaned ? `${todayStr()}-${cleaned}` : todayStr()}`;
 }
 
 /** The parent path of a LOC — everything up to and including the last colon. */
@@ -495,6 +538,18 @@ async function initImport() {
     const storedMemoryId = await getStoredMemoryId();
     if (storedMemoryId && memories.some((m) => m.id === storedMemoryId)) {
       $('#memory').value = storedMemoryId;
+    }
+    // Restore the sticky app + task selection if still available (issue #17).
+    const storedApp = await getStoredApp();
+    if (storedApp && apps.some((a) => a.id === storedApp)) {
+      $('#app').value = storedApp;
+      await onAppChange(); // load the app's tasks before restoring the task
+      const storedTask = await getStoredTask();
+      if (storedTask && [...$('#task').options].some((o) => o.value === storedTask)) {
+        $('#task').value = storedTask;
+      }
+    } else {
+      await onAppChange(); // no app restored — reset/hide the task field (avoid stale tasks)
     }
     await renderRecentTargets(); // MRU quick-select of (memory, path) pairs (issue #12)
   } catch (err) {
@@ -1100,8 +1155,10 @@ async function init() {
     if (file) $('#name').value = $('#add-date').checked ? prefixDateName(file.name) : file.name;
     resetImportResult();
   });
-  $('#app').addEventListener('change', () => { onAppChange(); resetImportResult(); });
-  $('#task').addEventListener('change', resetImportResult);
+  // Persist the app + task choices (issue #17). Changing the app resets its
+  // task list, so clear the stored task; it's re-stored when a task is picked.
+  $('#app').addEventListener('change', () => { storeApp($('#app').value); storeTask(''); onAppChange(); resetImportResult(); });
+  $('#task').addEventListener('change', () => { storeTask($('#task').value); resetImportResult(); });
   // Persist the target memory (issue #7); editing any field clears a prior
   // import result and re-enables the button (issue #8).
   $('#memory').addEventListener('change', (e) => { storeMemoryId(e.target.value); resetImportResult(); });
