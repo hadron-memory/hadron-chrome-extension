@@ -181,6 +181,7 @@ fieldset.field legend { padding: 0 4px; }
 .profile-bar #profile-name { flex: 1; min-width: 0; }
 .profile-bar .profile-actions .linkbtn { flex: none; padding: 4px 10px; }
 .profile-bar .profile-actions .linkbtn:disabled { opacity: 0.5; cursor: default; }
+.profile-bar .profile-actions .linkbtn.ok { color: var(--ok-fg); border-color: var(--ok-fg); }
 code { font-size: 11px; background: var(--row-hover); padding: 1px 4px; border-radius: 4px; }
 
 /* ── lists / rows ───────────────────────────────────────── */

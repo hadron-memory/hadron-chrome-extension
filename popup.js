@@ -322,8 +322,17 @@ function debounce(fn, ms) {
   return debounced;
 }
 
-function slugify(s) {
-  return (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+// Slugify to a compact `[a-z0-9-]` token. When the source is longer than
+// maxLen, truncate at a word boundary (drop the trailing partial word) rather
+// than mid-word, and never end on a hyphen — the server rejects a LOC segment
+// that doesn't start and end with a letter or digit.
+function slugify(s, maxLen = 32) {
+  let out = (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  if (out.length > maxLen) {
+    const cut = out.slice(0, maxLen);
+    out = cut.replace(/-[^-]*$/, '') || cut; // drop a partial last word (keep if one long word)
+  }
+  return out.replace(/-+$/, ''); // never trail on a hyphen
 }
 
 // The LOC is composed from a Path (the profile's stable prefix, e.g.
@@ -332,10 +341,10 @@ function slugify(s) {
 function suggestPath(tab) {
   let host = 'page';
   try { host = new URL(tab.url).hostname.replace(/^www\./, ''); } catch {}
-  return `web:${slugify(host)}`;
+  return `web:${slugify(host, 24)}`;
 }
 function suggestSlug(tab) {
-  return slugify(tab?.title) || 'clip';
+  return slugify(tab?.title, 32) || 'clip';
 }
 
 // ── LOC / URN composition helpers (issue #11) ────────────────────────────────
@@ -352,13 +361,20 @@ function isSchemeUrn(s) {
   return /^(hrn|urn):/i.test((s || '').trim());
 }
 
-// Passive hygiene for a plain LOC: drop stray whitespace, collapse doubled
-// colons, and trim leading/trailing colons. Full display URNs (which carry a
-// scheme + `::` separators) are left untouched.
+// Passive hygiene for a plain LOC: drop stray whitespace, then normalize each
+// `:`-separated segment — trim non-alphanumeric edges (so a slug ending in `-`
+// can't produce an invalid segment) and drop empty segments (collapsing doubled
+// colons and leading/trailing colons). Full display URNs (scheme + `::`
+// separators) are left untouched.
 function sanitizeLoc(s) {
   const v = (s || '').trim();
   if (isSchemeUrn(v)) return v; // a full URN (scheme-prefixed) — don't mangle it
-  return v.replace(/\s+/g, '').replace(/:{2,}/g, ':').replace(/^:+|:+$/g, '');
+  return v
+    .replace(/\s+/g, '')
+    .split(':')
+    .map((seg) => seg.replace(/^[^a-z0-9]+/i, '').replace(/[^a-z0-9]+$/i, ''))
+    .filter(Boolean)
+    .join(':');
 }
 
 /** Drop a leading `YYYY-MM-DD ` date prefix from a name. */
@@ -672,7 +688,19 @@ async function onSaveProfile() {
   await storeProfiles(profiles);
   await storeActiveProfileId(saved.id);
   await renderProfiles();
+  flashSaved($('#profile-save')); // visible confirmation on the button itself
   setStatus('#import-status', 'ok', `Saved profile “${name}”.`);
+}
+
+// Briefly flash a button to "Saved ✓" to confirm the save landed.
+function flashSaved(btn) {
+  clearTimeout(btn._flashTimer);
+  btn.textContent = 'Saved ✓';
+  btn.classList.add('ok');
+  btn._flashTimer = setTimeout(() => {
+    btn.textContent = 'Save';
+    btn.classList.remove('ok');
+  }, 1600);
 }
 
 async function onDeleteProfile() {
