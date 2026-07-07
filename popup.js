@@ -355,10 +355,12 @@ function splitLocSlug(loc) {
   return i >= 0 ? [v.slice(0, i + 1), v.slice(i + 1)] : ['', v];
 }
 
-/** Drop a leading `YYYY-MM-DD-` date from the LOC's final slug segment. */
+/** Drop a leading `YYYY-MM-DD` date from the LOC's final slug segment. */
 function stripDateLoc(loc) {
+  if (isSchemeUrn(loc)) return loc || ''; // leave full URNs untouched, like prefixDateLoc
   const [prefix, slug] = splitLocSlug(loc);
-  return `${prefix}${slug.replace(/^\d{4}-\d{2}-\d{2}-/, '')}`;
+  // Hyphen optional so a slug that is *only* a date (`2026-07-06`) still strips.
+  return `${prefix}${slug.replace(/^\d{4}-\d{2}-\d{2}-?/, '')}`;
 }
 
 /** Prefix a node name with today's date (re-dating replaces an existing prefix). */
@@ -372,7 +374,8 @@ function prefixDateName(name) {
 function prefixDateLoc(loc) {
   if (isSchemeUrn(loc)) return loc || ''; // never date-prefix a full URN — it'd be invalid
   const [prefix, slug] = splitLocSlug(loc);
-  const cleaned = slug.replace(/^\d{4}-\d{2}-\d{2}-/, '');
+  // Hyphen optional so re-dating a slug that is *only* a date replaces it.
+  const cleaned = slug.replace(/^\d{4}-\d{2}-\d{2}-?/, '');
   return `${prefix}${cleaned ? `${todayStr()}-${cleaned}` : todayStr()}`;
 }
 
@@ -545,6 +548,8 @@ async function initImport() {
       if (storedTask && [...$('#task').options].some((o) => o.value === storedTask)) {
         $('#task').value = storedTask;
       }
+    } else {
+      await onAppChange(); // no app restored — reset/hide the task field (avoid stale tasks)
     }
     await renderRecentTargets(); // MRU quick-select of (memory, path) pairs (issue #12)
   } catch (err) {
