@@ -173,6 +173,9 @@ fieldset.field legend { padding: 0 4px; }
 .label { display: block; margin-bottom: 4px; }
 .radio { display: flex; align-items: center; gap: 8px; padding: 3px 0; cursor: pointer; }
 .hint { margin: 6px 2px 12px; font-size: 11px; }
+/* LOC field helper: sticky "prefix with today's date" checkbox. */
+.loc-field .loc-actions { margin-top: 4px; }
+.loc-actions .radio { padding: 0; }
 code { font-size: 11px; background: var(--row-hover); padding: 1px 4px; border-radius: 4px; }
 
 /* ── lists / rows ───────────────────────────────────────── */

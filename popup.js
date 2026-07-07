@@ -145,6 +145,44 @@ async function storeMemoryId(id) {
   else await chrome.storage.local.remove('importMemoryId');
 }
 
+// Sticky "prefix with today's date" preference: remembered across popup opens
+// so the choice persists like the target memory (issue #11).
+let mockAddDate = null; // preview-only persistence
+async function getStoredAddDate() {
+  if (!IN_EXTENSION) return !!mockAddDate;
+  const o = await chrome.storage.local.get('importAddDate');
+  return !!o.importAddDate;
+}
+async function storeAddDate(on) {
+  if (!IN_EXTENSION) { mockAddDate = !!on; return; }
+  await chrome.storage.local.set({ importAddDate: !!on });
+}
+
+// Recent Import targets: a short MRU list of (memory, LOC-prefix) pairs so a
+// frequently-used parent can be re-picked in one click (issue #12).
+const RECENT_TARGETS_MAX = 6;
+let mockRecentTargets = null; // preview-only persistence
+async function getRecentTargets() {
+  if (!IN_EXTENSION) return mockRecentTargets || [];
+  const o = await chrome.storage.local.get('importRecentTargets');
+  return o.importRecentTargets || [];
+}
+async function storeRecentTargets(list) {
+  if (!IN_EXTENSION) { mockRecentTargets = list; return; }
+  await chrome.storage.local.set({ importRecentTargets: list });
+}
+// Push a just-used target to the front, de-duped by (memory, LOC-prefix).
+async function recordRecentTarget({ memoryId, memoryName, memoryUrn, loc }) {
+  if (!memoryId) return;
+  const locPrefix = locPrefixOf(loc);
+  const entry = { memoryId, memoryName, memoryUrn, locPrefix };
+  const list = (await getRecentTargets()).filter(
+    (t) => !(t.memoryId === memoryId && t.locPrefix === locPrefix),
+  );
+  list.unshift(entry);
+  await storeRecentTargets(list.slice(0, RECENT_TARGETS_MAX));
+}
+
 /** Default active org: the stored one if still accessible, else personal, else first. */
 function pickActiveOrg(list, stored) {
   if (!list.length) return null;
@@ -252,6 +290,56 @@ function suggestLoc(tab) {
   let host = 'page';
   try { host = new URL(tab.url).hostname.replace(/^www\./, ''); } catch {}
   return `web:${slugify(host)}:${slugify(tab.title) || 'clip'}`;
+}
+
+// ── LOC / URN composition helpers (issue #11) ────────────────────────────────
+
+/** Local (not UTC) YYYY-MM-DD, used to prefix names/LOCs with a capture date. */
+function todayStr() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** A full, scheme-prefixed URN (hrn:/urn:) rather than a plain LOC. */
+function isSchemeUrn(s) {
+  return /^(hrn|urn):/i.test((s || '').trim());
+}
+
+// Passive hygiene for a plain LOC: drop stray whitespace, collapse doubled
+// colons, and trim leading/trailing colons. Full display URNs (which carry a
+// scheme + `::` separators) are left untouched.
+function sanitizeLoc(s) {
+  const v = (s || '').trim();
+  if (isSchemeUrn(v)) return v; // a full URN (scheme-prefixed) — don't mangle it
+  return v.replace(/\s+/g, '').replace(/:{2,}/g, ':').replace(/^:+|:+$/g, '');
+}
+
+/** Drop a leading `YYYY-MM-DD ` date prefix from a name. */
+function stripDateName(name) {
+  return (name || '').replace(/^\d{4}-\d{2}-\d{2}\s+/, '');
+}
+
+/** Drop a leading `YYYY-MM-DD:` date segment from a LOC. */
+function stripDateLoc(loc) {
+  return (loc || '').replace(/^\d{4}-\d{2}-\d{2}:/, '');
+}
+
+/** Prefix a node name with today's date (re-dating replaces an existing prefix). */
+function prefixDateName(name) {
+  return `${todayStr()} ${stripDateName(name)}`.trim();
+}
+
+/** Prefix a LOC with a today's-date segment (re-dating replaces an existing one). */
+function prefixDateLoc(loc) {
+  if (isSchemeUrn(loc)) return loc || ''; // never date-prefix a full URN — it'd be invalid
+  return `${todayStr()}:${stripDateLoc(loc)}`.replace(/:+$/, ''); // no trailing colon when LOC is empty
+}
+
+/** The parent path of a LOC — everything up to and including the last colon. */
+function locPrefixOf(loc) {
+  const i = (loc || '').lastIndexOf(':');
+  return i >= 0 ? loc.slice(0, i + 1) : '';
 }
 
 function handleUnauthorized() { showView('signedout'); }
@@ -389,6 +477,13 @@ async function initImport() {
     $('#name').value = activeTab.title || '';
     $('#loc').value = suggestLoc(activeTab);
   }
+  // Restore the sticky "prefix with today's date" choice and apply it (issue #11).
+  const addDate = await getStoredAddDate();
+  $('#add-date').checked = addDate;
+  if (addDate) {
+    $('#name').value = prefixDateName($('#name').value);
+    $('#loc').value = prefixDateLoc($('#loc').value);
+  }
   try {
     const [{ memories }, { apps }] = await Promise.all([
       bg('listMemories', { orgId: activeOrgId }),
@@ -401,10 +496,68 @@ async function initImport() {
     if (storedMemoryId && memories.some((m) => m.id === storedMemoryId)) {
       $('#memory').value = storedMemoryId;
     }
+    await renderRecentTargets(); // MRU quick-select of (memory, path) pairs (issue #12)
   } catch (err) {
     if (err.unauthorized) return handleUnauthorized();
     setStatus('#import-status', 'err', err.message);
   }
+}
+
+// Populate the "Recent targets" select, hiding it when there's nothing to show.
+// Only targets whose memory still appears in the current org's picker are kept.
+async function renderRecentTargets() {
+  const sel = $('#recent-target');
+  const field = $('#recent-field');
+  sel.length = 1; // keep the placeholder option
+  const memIds = new Set([...$('#memory').options].map((o) => o.value));
+  const usable = (await getRecentTargets()).filter((t) => memIds.has(t.memoryId));
+  for (const t of usable) {
+    const o = document.createElement('option');
+    o.value = JSON.stringify({ memoryId: t.memoryId, locPrefix: t.locPrefix });
+    const name = (t.memoryName || t.memoryId).split('  ·  ')[0]; // drop the class suffix
+    o.textContent = t.locPrefix ? `${name}  ·  ${t.locPrefix}` : name;
+    sel.appendChild(o);
+  }
+  field.classList.toggle('hidden', usable.length === 0);
+  sel.value = '';
+}
+
+// Apply a picked recent target: select its memory and swap in its LOC parent
+// path while preserving the current final segment.
+function onRecentTargetChange() {
+  const raw = $('#recent-target').value;
+  if (!raw) return;
+  let t;
+  try { t = JSON.parse(raw); } catch { return; }
+  const mem = $('#memory');
+  if (t.memoryId && [...mem.options].some((o) => o.value === t.memoryId)) {
+    mem.value = t.memoryId;
+    storeMemoryId(t.memoryId);
+  }
+  const cur = $('#loc').value.trim();
+  const lastSeg = cur
+    ? cur.slice(cur.lastIndexOf(':') + 1)
+    : (activeTab ? suggestLoc(activeTab).split(':').pop() : 'clip');
+  // Honor the sticky date preference: a stored prefix may or may not already
+  // carry a date, so normalize to the checkbox state either way (issue #11).
+  const rawLoc = `${t.locPrefix}${lastSeg}`;
+  $('#loc').value = $('#add-date').checked ? prefixDateLoc(rawLoc) : stripDateLoc(rawLoc);
+  resetImportResult();
+}
+
+// Sticky "prefix with today's date" checkbox: add or remove the date prefix on
+// both the name and the LOC, and remember the choice for next time (issue #11).
+async function onAddDateToggle() {
+  const on = $('#add-date').checked;
+  await storeAddDate(on);
+  if (on) {
+    $('#name').value = prefixDateName($('#name').value);
+    $('#loc').value = prefixDateLoc($('#loc').value);
+  } else {
+    $('#name').value = stripDateName($('#name').value);
+    $('#loc').value = stripDateLoc($('#loc').value);
+  }
+  resetImportResult();
 }
 
 function fillSelect(sel, items, placeholder) {
@@ -434,7 +587,9 @@ async function onAppChange() {
   const appId = $('#app').value;
   const taskField = $('#task-field');
   const taskSel = $('#task');
-  taskSel.length = 1;
+  taskSel.length = 1; // keep the placeholder option
+  taskSel.options[0].textContent = '— none —';
+  taskSel.disabled = false;
   if (!appId) return taskField.classList.add('hidden');
   try {
     const { tasks } = await bg('listAppTasks', { appId });
@@ -442,10 +597,16 @@ async function onAppChange() {
       const o = document.createElement('option');
       o.value = t.name; // page-import runTask resolves the task by name
       if (t.urn) o.dataset.urn = t.urn; // file-import importNode wants the URN
-      o.textContent = t.name;
+      o.textContent = t.loc ? `${t.name}  ·  ${t.loc}` : t.name; // loc disambiguates same-named tasks across memories
       taskSel.appendChild(o);
     }
-    taskField.classList.toggle('hidden', tasks.length === 0);
+    // Always reveal the picker once an app is chosen — an empty, disabled state
+    // makes it clear the app has no task nodes (vs. the control silently missing).
+    if (tasks.length === 0) {
+      taskSel.options[0].textContent = '— no task nodes in this app’s memories —';
+      taskSel.disabled = true;
+    }
+    taskField.classList.remove('hidden');
   } catch (err) {
     if (err.unauthorized) return handleUnauthorized();
     setStatus('#import-status', 'err', err.message);
@@ -485,7 +646,10 @@ async function onImport() {
   const memorySel = $('#memory');
   const memoryId = memorySel.value;
   const memoryUrn = memorySel.selectedOptions[0]?.dataset.urn || '';
-  const loc = $('#loc').value.trim();
+  // Enforce the colon sanitizer here too, not just on blur — the user may click
+  // Import without ever blurring the field. Reflect it back into the input.
+  const loc = sanitizeLoc($('#loc').value);
+  $('#loc').value = loc;
   const name = $('#name').value.trim();
   const source = $('input[name="source"]:checked').value;
   const taskSel = $('#task');
@@ -518,6 +682,10 @@ async function onImport() {
       });
     }
     await storeMemoryId(memoryId); // remember the target for next time (issue #7)
+    // Record this (memory, path) pair in the recent-targets MRU (issue #12).
+    const memoryName = memorySel.selectedOptions[0]?.textContent || '';
+    await recordRecentTarget({ memoryId, memoryName, memoryUrn, loc });
+    await renderRecentTargets();
     // Success: render the URN chip + Open button and keep the button disabled so
     // it's clear a second press isn't needed (issue #8). Editing any field
     // (see the reset wiring in init) clears this and re-enables importing.
@@ -929,7 +1097,7 @@ async function init() {
   $$('input[name="source"]').forEach((r) => r.addEventListener('change', () => { onSourceChange(); resetImportResult(); }));
   $('#file-input').addEventListener('change', (e) => {
     const file = e.target.files[0];
-    if (file) $('#name').value = file.name;
+    if (file) $('#name').value = $('#add-date').checked ? prefixDateName(file.name) : file.name;
     resetImportResult();
   });
   $('#app').addEventListener('change', () => { onAppChange(); resetImportResult(); });
@@ -937,6 +1105,9 @@ async function init() {
   // Persist the target memory (issue #7); editing any field clears a prior
   // import result and re-enables the button (issue #8).
   $('#memory').addEventListener('change', (e) => { storeMemoryId(e.target.value); resetImportResult(); });
+  $('#recent-target').addEventListener('change', onRecentTargetChange);
+  $('#add-date').addEventListener('change', onAddDateToggle);
+  $('#loc').addEventListener('blur', () => { $('#loc').value = sanitizeLoc($('#loc').value); });
   $('#loc').addEventListener('input', resetImportResult);
   $('#name').addEventListener('input', resetImportResult);
   $$('input[name="mode"]').forEach((r) => r.addEventListener('change', resetImportResult));
