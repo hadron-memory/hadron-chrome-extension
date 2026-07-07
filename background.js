@@ -96,13 +96,14 @@ const handlers = {
   //  - URL → hand the URL to the server to fetch + extract (public pages).
   // Post-import task processing (if any) is a separate runTask call.
   async send({ mode, tabId, tabUrl, tabTitle, memoryId, memoryUrn, loc, name, taskName, taskUrn }) {
-    const properties = { url: tabUrl, title: tabTitle, mode, capturedAt: new Date().toISOString() };
+    const properties = { url: tabUrl, sourceUrl: tabUrl, title: tabTitle, mode, capturedAt: new Date().toISOString() };
     let result;
 
     if (mode === 'html') {
       const page = await capturePage(tabId);
       if (!page) throw new Error('Could not read the page content.');
       properties.url = page.url || tabUrl;
+      properties.sourceUrl = page.url || tabUrl;
       properties.title = page.title || tabTitle;
       result = await importNode({
         memoryId,
