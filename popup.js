@@ -86,6 +86,8 @@ function mockBg(type, extra = {}) {
     ? extra.memoryUrn.replace(/^hrn:memory:/, 'hrn:node:')
     : 'hrn:node:acme.com::knowledge-base';
   const mockNode = (loc) => ({ loc, urn: `${mockNodeBase}::${loc}`, memoryId: extra.memoryId || 'm1' });
+  const mockTaskRun = (e) =>
+    e.taskUrn && e.appRef ? { ran: true, runId: 'run_mock', status: 'COMPLETED', failure: null } : { ran: false };
 
   const data = {
     getAuthState: { signedIn: true },
@@ -98,8 +100,10 @@ function mockBg(type, extra = {}) {
     listAppTasks: { tasks: tasksAll.filter((t) => t.memoryId === 'm1') },
     search: { hits: scopedHits.slice(off, off + lim), total: scopedHits.length },
     runTask: { result: '• Point one\n• Point two\n• Point three' },
-    send: { node: mockNode(extra.loc || 'web:example:clip'), status: 'STORED', taskStarted: Boolean(extra.taskName || extra.taskUrn) },
-    importFile: { node: mockNode(extra.loc || 'file:import'), status: 'STORED', taskStarted: Boolean(extra.taskName || extra.taskUrn) },
+    // Synthesize a completed run when a task+app were picked, so the run-result
+    // line renders in the preview (the real server executes + polls; #21).
+    send: { node: mockNode(extra.loc || 'web:example:clip'), status: 'STORED', task: mockTaskRun(extra) },
+    importFile: { node: mockNode(extra.loc || 'file:import'), status: 'STORED', task: mockTaskRun(extra) },
   };
   return Promise.resolve({ ok: true, ...(data[type] || {}) });
 }
@@ -827,9 +831,11 @@ async function onImport() {
   const loc = sanitizeLoc(path ? `${path}:${slug}` : slug);
   const name = $('#name').value.trim();
   const source = $('input[name="source"]:checked').value;
-  const taskSel = $('#task');
-  const taskName = taskSel.value || null; // selected task display name (runTask fallback)
-  const taskUrn = taskSel.selectedOptions[0]?.dataset.urn || null; // selected task URN (runTask URN bypass)
+  // Post-import execution (#21): run the picked task against the new node via
+  // its URN, under the selected app (appRef). Both come from the option datasets.
+  const taskUrn = $('#task').selectedOptions[0]?.dataset.urn || null;
+  const appSel = $('#app');
+  const appRef = appSel.selectedOptions[0]?.dataset.urn || appSel.value || null;
 
   setStatus('#import-status', null);
   resetImportResult();
@@ -846,14 +852,14 @@ async function onImport() {
       const { content, contentType } = await readFile(file);
       resp = await bg('importFile', {
         memoryId, memoryUrn, loc, name: name || file.name, content, contentType,
-        fileName: file.name, taskName, taskUrn,
+        fileName: file.name, taskUrn, appRef,
       });
     } else {
       if (!activeTab) throw new Error('No active tab.');
       const mode = $('input[name="mode"]:checked').value;
       resp = await bg('send', {
         mode, tabId: activeTab.id, tabUrl: activeTab.url, tabTitle: activeTab.title,
-        memoryId, memoryUrn, loc, name, taskName, taskUrn,
+        memoryId, memoryUrn, loc, name, taskUrn, appRef,
       });
     }
     await storeMemoryId(memoryId); // remember the target for next time (issue #7)
@@ -861,6 +867,7 @@ async function onImport() {
     // it's clear a second press isn't needed (issue #8). Editing any field
     // (see the reset wiring in init) clears this and re-enables importing.
     showImportResult(resp.node, loc);
+    showRunResult(resp.task); // post-import task-run outcome (#21)
     btn.textContent = 'Imported ✓';
   } catch (err) {
     btn.disabled = false;
@@ -900,6 +907,38 @@ function showImportResult(node, loc) {
   $('#import-result').classList.remove('hidden');
 }
 
+// Report the post-import task run (#21). The run writes its output to the node,
+// so we surface status, not inline text. Best-effort: a run that couldn't start
+// (e.g. the admin-only gate) is shown as a soft note — the import still landed.
+function showRunResult(task) {
+  const el = $('#import-result-run');
+  if (!el) return;
+  el.classList.remove('ok', 'err', 'muted');
+  if (!task || !task.ran) {
+    if (task?.error) {
+      el.textContent = `Task not started: ${task.error}`;
+      el.classList.add('muted');
+      el.classList.remove('hidden');
+    } else {
+      el.classList.add('hidden'); // no task picked — nothing to report
+    }
+    return;
+  }
+  const s = task.status;
+  if (s === 'COMPLETED') {
+    el.textContent = 'Task run completed ✓';
+    el.classList.add('ok');
+  } else if (s === 'FAILED' || s === 'TIMED_OUT' || s === 'CANCELLED') {
+    const why = task.failure ? `: ${typeof task.failure === 'string' ? task.failure : JSON.stringify(task.failure)}`.slice(0, 200) : '';
+    el.textContent = `Task run ${s.toLowerCase()}${why}`;
+    el.classList.add('err');
+  } else {
+    el.textContent = 'Task is still running — track it in the portal.';
+    el.classList.add('muted');
+  }
+  el.classList.remove('hidden');
+}
+
 // Clear the success block and re-enable the Import button — called when the user
 // edits an import field after a completed import. Also drops any stale error
 // status so it clears the moment the user starts fixing the input.
@@ -909,6 +948,8 @@ function resetImportResult() {
   if (result.classList.contains('hidden')) return;
   result.classList.add('hidden');
   $('#import-result-urn').innerHTML = '';
+  const runEl = $('#import-result-run');
+  if (runEl) { runEl.classList.add('hidden'); runEl.textContent = ''; }
   const btn = $('#btn-import');
   btn.disabled = false;
   btn.textContent = 'Import to Hadron';
