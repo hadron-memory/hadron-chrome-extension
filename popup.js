@@ -40,12 +40,12 @@ function mockBg(type, extra = {}) {
     { id: 'org2', name: 'Holger (personal)', urn: 'hrn:org:holger', isVisible: null },
   ];
   const memoriesAll = [
-    { id: 'm1', organizationId: 'org1', urn: 'hrn:memory:acme.com::knowledge-base', name: 'Knowledge Base', class: 'knowledge', shortDescription: 'Shared org knowledge.', description: 'The organization-wide knowledge base: product docs, decisions, and reference material clipped from the web.' },
-    { id: 'm2', organizationId: 'org1', urn: 'hrn:memory:acme.com::research', name: 'Research', class: 'group', shortDescription: 'Research notes.', description: 'Working memory for the research team — sources, summaries, and in-progress findings.' },
-    { id: 'm3', organizationId: 'org2', urn: 'hrn:memory:holger::personal', name: 'Personal', class: 'personal', shortDescription: 'My private memory.', description: 'Personal, private clips and notes visible only to me.' },
+    { id: 'm1', organizationId: 'org1', urn: 'hrn:mem:acme.com:knowledge-base', name: 'Knowledge Base', class: 'knowledge', shortDescription: 'Shared org knowledge.', description: 'The organization-wide knowledge base: product docs, decisions, and reference material clipped from the web.' },
+    { id: 'm2', organizationId: 'org1', urn: 'hrn:mem:acme.com:research', name: 'Research', class: 'group', shortDescription: 'Research notes.', description: 'Working memory for the research team — sources, summaries, and in-progress findings.' },
+    { id: 'm3', organizationId: 'org2', urn: 'hrn:mem:holger:personal', name: 'Personal', class: 'personal', shortDescription: 'My private memory.', description: 'Personal, private clips and notes visible only to me.' },
     ...Array.from({ length: 11 }, (_, i) => ({
       id: `mx${i + 1}`, organizationId: 'org1',
-      urn: `hrn:memory:acme.com::project-${i + 1}`,
+      urn: `hrn:mem:acme.com:project-${i + 1}`,
       name: `Project ${i + 1}`,
       class: i % 2 === 0 ? 'group' : 'knowledge',
       shortDescription: `Memory for project ${i + 1}.`,
@@ -53,24 +53,24 @@ function mockBg(type, extra = {}) {
     })),
   ];
   const appsAll = [
-    { id: 'a1', organizationId: 'org1', urn: 'hrn:app:acme.com::research-assistant', name: 'Research Assistant', appType: 'AGENT' },
-    { id: 'a2', organizationId: 'org1', urn: 'hrn:app:acme.com::clipper', name: 'Web Clipper', appType: 'AUTOMATION' },
+    { id: 'a1', organizationId: 'org1', urn: 'hrn:app:acme.com:research-assistant', name: 'Research Assistant', appType: 'AGENT' },
+    { id: 'a2', organizationId: 'org1', urn: 'hrn:app:acme.com:clipper', name: 'Web Clipper', appType: 'AUTOMATION' },
   ];
   const tasksAll = [
-    { id: 't1', organizationId: 'org1', loc: 'tasks:summarize', urn: 'hrn:node:acme.com::knowledge-base::tasks:summarize', name: 'Summarize content', nodeType: 'task', abstract: 'Summarize the imported page into five bullet points.', memoryId: 'm1' },
-    { id: 't2', organizationId: 'org1', loc: 'tasks:extract-links', urn: 'hrn:node:acme.com::knowledge-base::tasks:extract-links', name: 'Extract links', nodeType: 'task', abstract: 'Pull every outbound link out of the page.', memoryId: 'm1' },
-    { id: 't3', organizationId: 'org1', loc: 'tasks:tag', urn: 'hrn:node:acme.com::research::tasks:tag', name: 'Auto-tag', nodeType: 'task', abstract: 'Suggest tags for the node from its content.', memoryId: 'm2' },
+    { id: 't1', organizationId: 'org1', loc: 'tasks:summarize', urn: 'hrn:node:acme.com:knowledge-base:tasks:summarize', name: 'Summarize content', nodeType: 'task', abstract: 'Summarize the imported page into five bullet points.', memoryId: 'm1' },
+    { id: 't2', organizationId: 'org1', loc: 'tasks:extract-links', urn: 'hrn:node:acme.com:knowledge-base:tasks:extract-links', name: 'Extract links', nodeType: 'task', abstract: 'Pull every outbound link out of the page.', memoryId: 'm1' },
+    { id: 't3', organizationId: 'org1', loc: 'tasks:tag', urn: 'hrn:node:acme.com:research:tasks:tag', name: 'Auto-tag', nodeType: 'task', abstract: 'Suggest tags for the node from its content.', memoryId: 'm2' },
   ];
   // orgId scoping (server-side in production; emulated here for the preview).
   const byOrg = (arr) => (extra.orgId ? arr.filter((x) => x.organizationId === extra.orgId) : arr);
 
   const allHits = extra.query
     ? [
-        { entityType: 'memory', id: 'm2', organizationId: 'org1', urn: 'hrn:memory:acme.com::research', name: 'Research', description: 'A group memory.', matchedField: 'name', score: 0.95, memoryId: 'm2' },
-        { entityType: 'app', id: 'a1', organizationId: 'org1', urn: 'hrn:app:acme.com::research-assistant', name: 'Research Assistant', description: 'An agent app.', matchedField: 'name', score: 0.9 },
+        { entityType: 'memory', id: 'm2', organizationId: 'org1', urn: 'hrn:mem:acme.com:research', name: 'Research', description: 'A group memory.', matchedField: 'name', score: 0.95, memoryId: 'm2' },
+        { entityType: 'app', id: 'a1', organizationId: 'org1', urn: 'hrn:app:acme.com:research-assistant', name: 'Research Assistant', description: 'An agent app.', matchedField: 'name', score: 0.9 },
         ...Array.from({ length: 21 }, (_, i) => ({
           entityType: 'node', id: `n${i + 1}`, organizationId: 'org1',
-          urn: `hrn:node:acme.com::knowledge-base::web:${extra.query}-${i + 1}`,
+          urn: `hrn:node:acme.com:knowledge-base:web:${extra.query}-${i + 1}`,
           name: `Result ${i + 1} for “${extra.query}”`,
           description: i % 2 === 0 ? `A matching node about ${extra.query}.` : '',
           matchedField: 'content', score: 0.8 - i * 0.01, memoryId: 'm1',
@@ -83,9 +83,9 @@ function mockBg(type, extra = {}) {
 
   // Synthesize a plausible node URN for the import preview (real server echoes one).
   const mockNodeBase = extra.memoryUrn
-    ? extra.memoryUrn.replace(/^hrn:memory:/, 'hrn:node:')
-    : 'hrn:node:acme.com::knowledge-base';
-  const mockNode = (loc) => ({ loc, urn: `${mockNodeBase}::${loc}`, memoryId: extra.memoryId || 'm1' });
+    ? extra.memoryUrn.replace(/^hrn:mem:/, 'hrn:node:')
+    : 'hrn:node:acme.com:knowledge-base';
+  const mockNode = (loc) => ({ loc, urn: `${mockNodeBase}:${loc}`, memoryId: extra.memoryId || 'm1' });
   const mockTaskRun = (e) =>
     e.taskUrn && e.appRef ? { ran: true, runId: 'run_mock', status: 'COMPLETED', failure: null } : { ran: false };
 
@@ -368,8 +368,8 @@ function isSchemeUrn(s) {
 // Passive hygiene for a plain LOC: drop stray whitespace, then normalize each
 // `:`-separated segment — trim non-alphanumeric edges (so a slug ending in `-`
 // can't produce an invalid segment) and drop empty segments (collapsing doubled
-// colons and leading/trailing colons). Full display URNs (scheme + `::`
-// separators) are left untouched.
+// colons and leading/trailing colons). Full display URNs (scheme-prefixed) are
+// left untouched.
 function sanitizeLoc(s) {
   const v = (s || '').trim();
   if (isSchemeUrn(v)) return v; // a full URN (scheme-prefixed) — don't mangle it
